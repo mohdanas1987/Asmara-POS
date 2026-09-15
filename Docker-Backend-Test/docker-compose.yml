@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5102:5102"
+    volumes:
+      # Live-edit source from your Mac -- nodemon (in docker-entrypoint.sh) picks up changes
+      # and restarts automatically, no rebuild needed for a plain code edit.
+      - ./backend:/app
+      # ...except node_modules: this anonymous volume shadows the bind mount above just for
+      # that one folder, so the container keeps ITS OWN installed node_modules (built for
+      # the container's Linux platform) instead of whatever happens to be on your Mac.
+      - backend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  backend_node_modules:

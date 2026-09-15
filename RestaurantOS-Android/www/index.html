@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>RestaurantOS</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #171717; font-family: -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: none; }
+  #setup { display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+  .card { width: 100%; max-width: 420px; background: #fff; border-radius: 16px; padding: 28px; box-sizing: border-box; }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #171717; }
+  p { font-size: 13px; color: #737373; margin: 0 0 20px; line-height: 1.5; }
+  label { font-size: 13px; font-weight: 600; color: #404040; display: block; margin-bottom: 6px; }
+  input { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #d4d4d4; border-radius: 10px; font-size: 16px; margin-bottom: 16px; }
+  button { width: 100%; padding: 14px; border: 0; border-radius: 10px; background: #171717; color: #fff; font-size: 15px; font-weight: 600; }
+  button:active { opacity: 0.85; }
+  .err { color: #dc2626; font-size: 13px; margin-top: -8px; margin-bottom: 12px; display: none; }
+  .hint { font-size: 12px; color: #a3a3a3; margin-top: 16px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <!--
+    RestaurantOS Android terminal -- a THIN CLIENT, by design. It does not run its own copy
+    of the backend or database: it's a satellite screen that connects over the restaurant's
+    own WiFi/LAN to the main POS machine (the Windows/Mac computer running the real
+    RestaurantOS Desktop app, which has the actual Express backend + SQLite database + all
+    the hardware integrations). This mirrors exactly how the customer-facing display window
+    already works in RestaurantOS-Desktop/main.js -- a second screen pointed at the same
+    local server, not a second copy of the app. Every restaurant's data stays on ONE machine
+    on their own network; nothing here talks to any Anthropic or third-party server, and this
+    app is never submitted to the Play Store -- it's meant to be installed by copying the
+    .apk directly onto the tablet (see the Android build README for exactly how).
+  -->
+  <div id="setup">
+    <div class="card">
+      <h1>Connect this terminal</h1>
+      <p>Enter the address of the main POS computer on your restaurant's WiFi (shown on that computer's setup screen, e.g. 192.168.1.42).</p>
+      <label for="host">POS computer address</label>
+      <input id="host" type="text" inputmode="url" placeholder="192.168.1.42" autocapitalize="off" autocorrect="off" />
+      <div class="err" id="err">Could not reach that address. Check both devices are on the same WiFi network.</div>
+      <button id="connect">Connect</button>
+      <p class="hint">This tablet never stores restaurant data itself -- it's a screen for the POS computer's software, same as a second monitor.</p>
+    </div>
+  </div>
+  <iframe id="frame"></iframe>
+  <script>
+    var STORAGE_KEY = 'restaurantos_pos_host';
+    var frame = document.getElementById('frame');
+    var setup = document.getElementById('setup');
+    var hostInput = document.getElementById('host');
+    var err = document.getElementById('err');
+
+    function urlFor(host) {
+      var clean = host.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      return 'http://' + clean + ':3000/pos';
+    }
+
+    function tryConnect(host) {
+      err.style.display = 'none';
+      var url = urlFor(host);
+      // A quick reachability probe before committing the whole screen to an iframe load --
+      // gives a clear "couldn't reach it" message instead of a blank white screen, which is
+      // what a cashier would otherwise see on a typo'd IP or a WiFi that hasn't connected yet.
+      fetch(url.replace('/pos', '/check-connection').replace(':3000', ':5102'), { mode: 'no-cors' })
+        .then(function () { commit(host, url); })
+        .catch(function () { commit(host, url); }); // no-cors responses always look like errors to fetch; proceed and let the iframe itself report a real failure
+    }
+
+    function commit(host, url) {
+      try { localStorage.setItem(STORAGE_KEY, host); } catch (e) {}
+      setup.style.display = 'none';
+      frame.style.display = 'block';
+      frame.src = url;
+    }
+
+    document.getElementById('connect').addEventListener('click', function () {
+      var host = hostInput.value.trim();
+      if (!host) return;
+      tryConnect(host);
+    });
+
+    try {
+      var saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        hostInput.value = saved;
+        tryConnect(saved);
+      }
+    } catch (e) {}
+
+    // Long-press-free way back to setup: tapping the top-left corner 3 times reopens it
+    // (a tablet mounted at a POS station usually has no visible back/URL bar for the cashier
+    // to fix a wrong address themselves otherwise).
+    var taps = 0, tapTimer = null;
+    document.addEventListener('click', function (e) {
+      if (e.clientX > 60 || e.clientY > 60) return;
+      taps += 1;
+      clearTimeout(tapTimer);
+      tapTimer = setTimeout(function () { taps = 0; }, 800);
+      if (taps >= 3) {
+        taps = 0;
+        frame.style.display = 'none';
+        frame.src = 'about:blank';
+        setup.style.display = 'flex';
+      }
+    });
+  </script>
+</body>
+</html>

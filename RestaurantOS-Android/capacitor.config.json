@@ -1,0 +1,9 @@
+{
+  "appId": "com.asmaraeindhoven.restaurantos",
+  "appName": "RestaurantOS",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  }
+}

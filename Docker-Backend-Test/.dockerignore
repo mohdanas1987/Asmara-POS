@@ -1,0 +1,7 @@
+backend/node_modules
+backend/local_test.sqlite
+backend/.seeded
+backend/.env
+backend/.env.local
+backend/test/.tmp
+backend/logs

@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+.next/
+**/.next/
+dist/
+**/dist/
+build/
+**/build/
+RestaurantOS-Android/android/app/build/
+RestaurantOS-Android/android/.gradle/
+RestaurantOS-Android/android/local.properties
+
+# Environment / secrets -- JWT_SECRET and any real DB credentials must never be committed
+.env
+.env.local
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Databases -- real or test restaurant data must never be committed
+*.sqlite
+*.sqlite3
+**/*.sqlite
+**/*.sqlite3
+
+# OS cruft
+.DS_Store
+**/.DS_Store
+
+# Old (pre-rebuild) app reference copy: backend/db.js in here hardcodes the LIVE production
+# database password in plain text, and STAGE2-CHANGES.patch's diff context still shows it too.
+# This folder is a historical reference snapshot, not part of the active RestaurantOS
+# codebase, so it's excluded wholesale rather than trying to redact one string inside it.
+# See governance/ and phases/ for the project history instead.
+Currently ready for prod/
+
+# Real exported customer data pulled from the live database (menu photos, live business
+# data) -- large, and real restaurant data doesn't belong in source control.
+migration-export/
+
+# Local throwaway test databases and per-machine deployment package (regenerated, not source)
+Asmara-Windows-POS/
