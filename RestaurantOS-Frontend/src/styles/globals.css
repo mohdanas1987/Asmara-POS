@@ -52,10 +52,13 @@ body {
     visibility: hidden;
   }
   #bill-preview-printable,
-  #bill-preview-printable * {
+  #bill-preview-printable *,
+  #loyalty-card-print,
+  #loyalty-card-print * {
     visibility: visible;
   }
-  #bill-preview-printable {
+  #bill-preview-printable,
+  #loyalty-card-print {
     position: absolute;
     left: 0;
     top: 0;

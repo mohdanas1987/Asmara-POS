@@ -126,6 +126,21 @@ export interface Customer {
   email?: string | null;
   phone: string;
   note?: string | null;
+  customer_code?: string | null;
+}
+
+// Customer QR/barcode identity + printable loyalty card (task #48). Backend has carried
+// customer_code and this ledger shape since the loyalty subsystem was built (task #31) --
+// nothing in the frontend read either until now.
+export interface LoyaltyLedgerRow {
+  id: number;
+  customer_id: number;
+  order_id?: string | null;
+  type: 'earn' | 'redeem' | 'adjust';
+  points: number;
+  balance_after: number;
+  reason?: string | null;
+  created_at: string;
 }
 
 export interface ReportRow {

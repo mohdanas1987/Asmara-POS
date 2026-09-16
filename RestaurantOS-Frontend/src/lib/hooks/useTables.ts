@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getTables, updateTablePosition, transferTable, freeAllTables, freeSelectedTables, mergeTables, getOrders, initTableOrder } from '@/lib/api';
+import { getTerminalId } from '@/lib/terminal';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 
 export function useTables() {
@@ -42,7 +43,9 @@ export function useTables() {
 
   const transfer = useCallback(
     async (fromTable: string, toTable: string) => {
-      await transferTable(fromTable, toTable);
+      // terminal_id (task #47): lets the backend's sync log attribute this change to a real
+      // terminal instead of falling back to 'unknown-terminal'.
+      await transferTable(fromTable, toTable, getTerminalId());
       await refresh();
     },
     [refresh]

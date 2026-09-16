@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Customer } from '@/lib/types';
 import { getCustomers, createCustomer } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { CustomerLoyaltyDialog } from '@/components/customers/CustomerLoyaltyDialog';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -16,6 +17,7 @@ export default function CustomersPage() {
   const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [loyaltyCustomerId, setLoyaltyCustomerId] = useState<number | null>(null);
 
   useEffect(() => {
     getCustomers()
@@ -106,6 +108,8 @@ export default function CustomersPage() {
                 <th className="px-4 py-2">Name</th>
                 <th className="px-4 py-2">Phone</th>
                 <th className="px-4 py-2">Email</th>
+                <th className="px-4 py-2">Loyalty code</th>
+                <th className="px-4 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -114,11 +118,21 @@ export default function CustomersPage() {
                   <td className="px-4 py-2 font-medium">{c.name}</td>
                   <td className="px-4 py-2 text-neutral-500">{c.phone}</td>
                   <td className="px-4 py-2 text-neutral-500">{c.email || '—'}</td>
+                  <td className="px-4 py-2 font-mono text-xs text-neutral-500">{c.customer_code || '—'}</td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setLoyaltyCustomerId(c.id)}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-brand hover:bg-brand/10"
+                    >
+                      Loyalty card
+                    </button>
+                  </td>
                 </tr>
               ))}
               {customers.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="px-4 py-12 text-center text-neutral-400">
+                  <td colSpan={5} className="px-4 py-12 text-center text-neutral-400">
                     No customers yet.
                   </td>
                 </tr>
@@ -127,6 +141,8 @@ export default function CustomersPage() {
           </table>
         </div>
       )}
+
+      <CustomerLoyaltyDialog customerId={loyaltyCustomerId} onClose={() => setLoyaltyCustomerId(null)} />
     </main>
   );
 }

@@ -165,3 +165,36 @@ test('a second tenant cannot look up or redeem against the first tenant\'s custo
     // service's own balance check -- either way, tenant 2 must never redeem tenant 1's points.
     assert.ok([400, 404].includes(redeemRes.status), `expected 400 or 404, got ${redeemRes.status}`);
 });
+
+// Task #48 (customer QR/barcode identity + printable loyalty card): the frontend now renders
+// a QR code from `customer_code`, so the two customer-list endpoints it reads from must
+// actually include that field -- this caught a real gap (both endpoints selected an explicit
+// column list that omitted it) before it shipped.
+test('GET /pos/customers includes customer_code so the frontend can render a QR/loyalty card', async () => {
+    const res = await request(ctx.app).get('/pos/customers').set('asmara-token', token);
+    assert.equal(res.status, 200);
+    const found = res.body.find((c) => c.id === customerId);
+    assert.ok(found, 'seeded customer should be in the list');
+    assert.equal(found.customer_code, 'LC-1-TEST0001');
+});
+
+test('POST /pos/create-customer returns a customer_code on the new customer and includes it in the refreshed list', async () => {
+    const res = await request(ctx.app)
+        .post('/pos/create-customer')
+        .set('asmara-token', token)
+        .send({ first_name: 'QR', last_name: 'Test', phone: '+31600000099' });
+
+    assert.equal(res.body.status, true);
+    const created = res.body.customers.find((c) => c.phone === '+31600000099');
+    assert.ok(created, 'newly created customer should be in the returned list');
+    assert.ok(created.customer_code, 'a customer_code should have been generated');
+});
+
+test('GET /loyalty/customers/:id returns customer, balance, and ledger for the loyalty card dialog', async () => {
+    const res = await request(ctx.app).get(`/loyalty/customers/${customerId}`).set('asmara-token', token);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, true);
+    assert.equal(res.body.customer.customer_code, 'LC-1-TEST0001');
+    assert.equal(typeof res.body.balance, 'number');
+    assert.ok(Array.isArray(res.body.ledger));
+});

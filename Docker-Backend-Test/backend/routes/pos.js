@@ -153,7 +153,7 @@ router.post('/create-customer', fetchuser, async (req, res )=> {
             tenant_id: req.body.tenant_id,
             customer_code: customerCode
         });
-        const customers = await Customer.query().where('tenant_id', req.body.tenant_id).orderBy('id','desc').select(['id','name','email','phone']);
+        const customers = await Customer.query().where('tenant_id', req.body.tenant_id).orderBy('id','desc').select(['id','name','email','phone','customer_code']);
 
         return res.json({
             status:true,
@@ -170,7 +170,7 @@ router.post('/create-customer', fetchuser, async (req, res )=> {
 
 router.get('/customers', fetchuser, async (req,res) => {
     try {
-        const customers = await Customer.query().where('tenant_id', req.body.tenant_id).orderBy(`id`,'desc').select(['id','name','phone','email']);
+        const customers = await Customer.query().where('tenant_id', req.body.tenant_id).orderBy(`id`,'desc').select(['id','name','phone','email','customer_code']);
         return res.json(customers);
     } catch (error) {
         console.log(error)

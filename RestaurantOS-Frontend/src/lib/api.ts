@@ -158,10 +158,12 @@ export async function updateTablePosition(tableNumber: string, x: number, y: num
   );
 }
 
-export async function transferTable(fromTable: string, toTable: string) {
+export async function transferTable(fromTable: string, toTable: string, terminalId?: string) {
   return apiFetch<{ status: boolean; message: string }>('/tables/transfer', {
     method: 'POST',
-    body: JSON.stringify({ from_table: fromTable, to_table: toTable }),
+    // terminal_id (task #47): so the offline sync log records which physical terminal made
+    // this change instead of the 'unknown-terminal' fallback every transfer got before.
+    body: JSON.stringify({ from_table: fromTable, to_table: toTable, terminal_id: terminalId }),
   });
 }
 
@@ -341,6 +343,42 @@ export async function createCustomer(input: { first_name: string; last_name: str
     '/pos/create-customer',
     { method: 'POST', body: JSON.stringify(input) }
   );
+}
+
+// --- Offline sync (routes/sync.js) -- task #47: wire the frontend to the existing backend
+// outbox/sync-log/terminal-identity engine. All three endpoints below have existed, tested
+// and unused by the frontend, since the offline-first foundation was built (task #32).
+
+export async function registerTerminal(terminalId: string, name?: string) {
+  return apiFetch<{ status: boolean }>('/sync/terminals/register', {
+    method: 'POST',
+    body: JSON.stringify({ terminal_id: terminalId, name }),
+  });
+}
+
+// --- Loyalty (routes/loyalty.js) -- task #48: customer QR identity + printable card ---
+
+export async function getCustomerLoyalty(customerId: number | string) {
+  return apiFetch<{
+    status: boolean;
+    customer: import('./types').Customer;
+    balance: number;
+    ledger: import('./types').LoyaltyLedgerRow[];
+  }>(`/loyalty/customers/${customerId}`);
+}
+
+export async function redeemLoyaltyPoints(customerId: number, points: number, orderId?: string) {
+  return apiFetch<{ status: boolean; message: string; euro_value: number }>('/loyalty/redeem', {
+    method: 'POST',
+    body: JSON.stringify({ customer_id: customerId, points, order_id: orderId ?? null }),
+  });
+}
+
+export async function adjustLoyaltyPoints(customerId: number, points: number, reason: string) {
+  return apiFetch<{ status: boolean; message: string }>('/loyalty/adjust', {
+    method: 'POST',
+    body: JSON.stringify({ customer_id: customerId, points, reason }),
+  });
 }
 
 // --- Reports (routes/orders.js) ---
