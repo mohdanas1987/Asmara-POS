@@ -9,6 +9,7 @@
 import { Dialog } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { TableOrderInfo, MenuItem } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 
 export function BillPreviewDialog({
   open,
@@ -27,7 +28,7 @@ export function BillPreviewDialog({
   const lines = Object.entries(quantities)
     .map(([productId, qty]) => {
       const item = menuItems.find((m) => String(m.id) === String(productId));
-      return { name: item?.name ?? `Item #${productId}`, price: item?.price ?? 0, qty: Number(qty) };
+      return { name: item?.name ?? `Item #${productId}`, price: parsePrice(item?.price), qty: Number(qty) };
     })
     .filter((line) => line.qty > 0);
 

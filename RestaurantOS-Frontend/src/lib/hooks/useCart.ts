@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { CartLine, MenuItem } from '@/lib/types';
-import { calculateInclusiveTax } from '@/lib/tax';
+import { calculateInclusiveTax, parsePrice } from '@/lib/tax';
 
 // CRITICAL BUG FIX (project audit 2026-09-16, live at the POS checkout -- found from a
 // direct user report: "tax is still being calculated in POS billing"): this used to hardcode
@@ -82,17 +82,24 @@ export function useCart() {
     setLines(restored);
   }, []);
 
+  // Owner-reported bug: a menu item with a malformed price string (e.g. a legacy dual
+  // "22.00 /24.00" combo price never split into two real items) made `item.price * qty`
+  // evaluate to NaN -- and because this is a SUM, adding that one NaN line silently
+  // poisoned the entire cart's `total`/`tax`/`subtotal` to NaN, not just that line's own
+  // display. `parsePrice` (lib/tax.ts) already existed for exactly this and falls back to
+  // 0 for anything it can't parse -- using it here instead of a bare arithmetic string
+  // coercion means one bad menu item can no longer break every other item's checkout.
   // `total` is the real, VAT-inclusive amount actually charged -- exactly the sum of each
   // line's (already-inclusive) price, unchanged from before this fix. `tax` and `subtotal`
   // are purely a breakdown of that same total for the receipt, never added to it.
   const total = useMemo(
-    () => lines.reduce((sum, l) => sum + l.item.price * (l.weight ?? l.qty), 0),
+    () => lines.reduce((sum, l) => sum + parsePrice(l.item.price) * (l.weight ?? l.qty), 0),
     [lines]
   );
   const tax = useMemo(
     () =>
       lines.reduce((sum, l) => {
-        const lineTotal = l.item.price * (l.weight ?? l.qty);
+        const lineTotal = parsePrice(l.item.price) * (l.weight ?? l.qty);
         return sum + calculateInclusiveTax(lineTotal, l.item.tax);
       }, 0),
     [lines]

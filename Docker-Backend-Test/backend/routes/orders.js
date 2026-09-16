@@ -74,7 +74,7 @@ router.get('/', fetchuser, async (req, res) => {
     let tableOrders = {};
     orders.forEach(order => {
         if (order && order.status !== 'completed') {
-            tableOrders[order.tables] = {
+            const info = {
                 id: order.id,
                 data: JSON.parse(order.data ?? '{}'),
                 status: order.status,
@@ -87,6 +87,20 @@ router.get('/', fetchuser, async (req, res) => {
                 // started, not just its current state.
                 created_at: order.created_at
             };
+            // Owner-reported bug ("table merge ... does not work"): a merged order's `tables`
+            // is a "+"-joined combo written by POST /orders/init/1+2 (e.g. "1+2"), so this map
+            // only ever had an entry under the literal key "1+2" -- but the floor plan looks
+            // up `tableOrders[table.table_number]` for EACH individual table ("1", then "2")
+            // to decide whether tapping that specific table should resume the shared order.
+            // Neither lookup ever matched, so a merged table showed "order ongoing" (amber)
+            // with no way to actually open the order that made it so. Indexing under every
+            // individual table number too (in addition to the combo key other callers, like
+            // the admin order list, already rely on) fixes that without changing the existing
+            // single-table behavior at all -- split('+') on a plain "3" just returns ["3"].
+            const tableKeys = String(order.tables ?? '').split('+').filter(Boolean);
+            for (const key of [order.tables, ...tableKeys]) {
+                if (key) tableOrders[key] = info;
+            }
         }
     });
 
@@ -753,9 +767,13 @@ router.get(`/last-order`, fetchuser, async (req, res) => {
     try {
         let order = await Order.query().where('tenant_id', req.body.tenant_id).where('status', '<>', 'ongoing').orderBy("created_at", "DESC").withGraphFetched('cashier').first();
         const cashier = order?.cashier;
-        let data = JSON.parse(order.data);
+        // Same crash shape found and fixed in utils.js's generateReport (X-report bug,
+        // owner-reported): `order.data` can be null (an ongoing/cancelled order swept up by
+        // the `<> 'ongoing'` filter above, or a genuinely dataless row), and JSON.parse(null)
+        // returns `null`, not `{}` -- reading `.quantity` off that null throws.
+        let data = order.data ? JSON.parse(order.data) : {};
 
-        const products = await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', keys(data.quantity));
+        const products = await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', keys(data.quantity ?? {}));
         const pairs = {};
         products.forEach(pr => {
             pr.taxAmount = calculateInclusiveTax(pr.price, pr.tax).toFixed(2);

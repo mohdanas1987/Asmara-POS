@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { MenuItem } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 import { getDesktopBridge, ScaleReading } from '@/lib/desktop';
 import { Button } from '@/components/ui/Button';
 
@@ -49,14 +50,14 @@ export function WeighItemModal({
   const manualParsed = parseFloat(manualWeight);
   const effectiveWeight = scaleAvailable && liveWeight !== null ? liveWeight : manualParsed;
   const validWeight = Number.isFinite(effectiveWeight) && effectiveWeight > 0;
-  const linePrice = validWeight ? effectiveWeight * item.price : 0;
+  const linePrice = validWeight ? effectiveWeight * parsePrice(item.price) : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
         <h2 className="text-lg font-semibold text-neutral-900">{item.name}</h2>
         <p className="mt-0.5 text-sm text-neutral-500">
-          €{Number(item.price).toFixed(2)} per {unit}
+          €{parsePrice(item.price).toFixed(2)} per {unit}
         </p>
 
         <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-center">

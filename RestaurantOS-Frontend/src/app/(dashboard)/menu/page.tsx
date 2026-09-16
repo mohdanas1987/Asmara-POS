@@ -18,7 +18,7 @@
 import { useMemo, useState } from 'react';
 import { useMenu } from '@/lib/hooks/useMenu';
 import { createCategory, updateItemStock, toggleItemOnPos } from '@/lib/api';
-import { calculateInclusiveTax } from '@/lib/tax';
+import { calculateInclusiveTax, parsePrice } from '@/lib/tax';
 import { Button } from '@/components/ui/Button';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -203,7 +203,7 @@ export default function MenuPage() {
                       <span className="mt-0.5 text-sm text-ink-muted">{item.catName ?? 'Uncategorized'}</span>
 
                       <div className="mt-2 flex items-baseline gap-1">
-                        <span className="text-lg font-semibold text-brand">€{Number(item.price).toFixed(2)}</span>
+                        <span className="text-lg font-semibold text-brand">€{parsePrice(item.price).toFixed(2)}</span>
                         {Boolean(item.sold_by_weight) && (
                           <span className="text-xs font-normal text-ink-muted">/ {item.weight_unit || 'kg'}</span>
                         )}

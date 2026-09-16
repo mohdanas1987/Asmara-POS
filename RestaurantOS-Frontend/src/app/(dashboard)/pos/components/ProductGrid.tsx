@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { MenuCategory, MenuItem } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 import clsx from 'clsx';
 
 function ItemThumb({ item }: { item: MenuItem }) {
@@ -97,8 +98,17 @@ export function ProductGrid({
             <span className="font-medium text-neutral-900">{item.name}</span>
             <span className="mt-1 text-sm text-neutral-500">{item.catName}</span>
             <span className="mt-2 text-lg font-semibold text-brand">
-              €{Number(item.price).toFixed(2)}
-              {item.sold_by_weight && <span className="text-xs font-normal text-neutral-400"> / {item.weight_unit || 'kg'}</span>}
+              €{parsePrice(item.price).toFixed(2)}
+              {/* Owner-reported bug: prices were rendering as "60.000" / "3.750" / "6.500" --
+                  an extra digit stuck onto every non-weighed item's price. Root cause: React
+                  renders the LEFT side of `x && <jsx>` literally when x is falsy but not
+                  `false`/`null`/`undefined` -- and `sold_by_weight` comes back from
+                  MySQL/SQLite as the NUMBER 0 for every normal item, not the boolean `false`.
+                  `0 && <span>...</span>` evaluates to `0`, and React prints that as the text
+                  "0", landing right after the price with no space. Wrapping in Boolean(...)
+                  (already done two lines below for the "Sold by weight" badge, and in the
+                  Menu page's equivalent price line) fixes it the same way. */}
+              {Boolean(item.sold_by_weight) && <span className="text-xs font-normal text-neutral-400"> / {item.weight_unit || 'kg'}</span>}
             </span>
             {Boolean(item.sold_by_weight) && (
               <span className="mt-1 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-500">⚖ Sold by weight</span>

@@ -1,6 +1,7 @@
 'use client';
 
 import { CartLine } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 import { Button } from '@/components/ui/Button';
 
 export function Cart({
@@ -42,15 +43,15 @@ export function Cart({
         {lines.map((line) => {
           const key = line.lineKey ?? String(line.item.id);
           const isWeighed = typeof line.weight === 'number';
-          const linePrice = line.item.price * (line.weight ?? line.qty);
+          const linePrice = parsePrice(line.item.price) * (line.weight ?? line.qty);
           return (
             <div key={key} className="flex items-center justify-between border-b border-neutral-100 py-2 last:border-0">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-neutral-900">{line.item.name}</p>
                 <p className="text-xs text-neutral-500">
                   {isWeighed
-                    ? `${line.weight!.toFixed(3)} ${line.item.weight_unit || 'kg'} × €${Number(line.item.price).toFixed(2)}/${line.item.weight_unit || 'kg'}`
-                    : `€${Number(line.item.price).toFixed(2)} each`}
+                    ? `${line.weight!.toFixed(3)} ${line.item.weight_unit || 'kg'} × €${parsePrice(line.item.price).toFixed(2)}/${line.item.weight_unit || 'kg'}`
+                    : `€${parsePrice(line.item.price).toFixed(2)} each`}
                 </p>
               </div>
               <div className="flex items-center gap-2">

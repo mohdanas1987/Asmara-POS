@@ -88,7 +88,19 @@ export default function TablesPage() {
     try {
       if (mode === 'merge') {
         if (selectedTables.length < 2) throw new Error('Select at least two tables to merge.');
-        await merge(selectedTables);
+        // Merging combines these tables into ONE shared order (see useTables.ts's merge) --
+        // that only makes sense before anyone's seated, so require every selected table to
+        // still be free. Merging an already-occupied table would silently strand its existing
+        // order (its own order row keeps pointing at just that table, while a brand new order
+        // gets created for the combo) rather than actually combining anything.
+        const notFree = selectedTables.filter((n) => tables.find((t) => t.table_number === n)?.status !== 'free');
+        if (notFree.length > 0) {
+          throw new Error(`Table${notFree.length > 1 ? 's' : ''} ${notFree.join(', ')} already ${notFree.length > 1 ? 'have' : 'has'} an order -- only free tables can be merged.`);
+        }
+        const { tableNumber, orderId } = await merge(selectedTables);
+        resetMode();
+        router.push(`/pos?table=${encodeURIComponent(tableNumber)}&order=${orderId}`);
+        return;
       } else {
         await freeSelected(selectedTables);
       }

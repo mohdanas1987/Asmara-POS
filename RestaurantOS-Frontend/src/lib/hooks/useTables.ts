@@ -66,10 +66,23 @@ export function useTables() {
     [refresh]
   );
 
+  // Owner-reported bug: merging tables "did not work" -- mergeTables() alone only tags the
+  // selected tables' `linked_to` metadata; it never actually started an order spanning them,
+  // so nothing ever visibly changed after confirming a merge. GET /orders/init/:table already
+  // supports a "+"-joined combo (routes/orders.js skips the single-table free-status check
+  // for one and creates an order with `tables: "1+2"`) -- this just calls it the same way
+  // openTable() does for a single free table, so merging behaves like tapping a free table:
+  // it opens one shared order and hands back where to navigate.
   const merge = useCallback(
-    async (tableNumbers: string[]) => {
+    async (tableNumbers: string[]): Promise<{ tableNumber: string; orderId: number }> => {
       await mergeTables(tableNumbers);
+      const combined = tableNumbers.join('+');
+      const res = await initTableOrder(combined);
+      if (!res.status || !res.order) {
+        throw new Error(res.message || 'Tables were linked, but the shared order could not be started.');
+      }
       await refresh();
+      return { tableNumber: combined, orderId: res.order.id };
     },
     [refresh]
   );

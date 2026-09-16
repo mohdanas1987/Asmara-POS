@@ -286,7 +286,13 @@ const generateReport = async (payload) => {
     const parsedOrders = orders.map(o => {
         const data = JSON.parse(o.data);
         if (data === null) return { ...o };
-        (keys(data.quantity) ?? []).forEach(id => {
+        // Bug fix (owner-reported, X-report crashing with "Cannot convert undefined or
+        // null to object"): `keys(x) ?? []` does NOT protect against `x` being undefined --
+        // `keys()` calls `Object.keys(x)` INSIDE itself and throws before the `??` ever gets
+        // a chance to substitute the fallback. An order whose `data` JSON has no `quantity`
+        // key at all (e.g. a very old or hand-inserted order) hit exactly this. Guarding the
+        // argument itself, not the call's result, actually fixes it.
+        (keys(data.quantity ?? {})).forEach(id => {
             productIds.push(id);
         });
         return { ...o, parsed: data };
