@@ -8,6 +8,7 @@ const router = express.Router();
 const fetchuser= require('../middlewares/loggedIn');
 const { getCurrentDate } = require("../utils");
 const { logger } = require('../utils/logger');
+const { calculateInclusiveTax } = require('../utils/tax');
 let error = { status : false, message:'Something went wrong!' }
 
 
@@ -50,9 +51,20 @@ router.get('/items', fetchuser, async(req, res) => { // updated function
             products: products.map(({ category, ...rest }) => ({
                 ...rest,
                 stock: 1,
-                image: rest.thumb ? rest.thumb: rest.image,
+                // BUG FIX (project audit 2026-09-16, live user report: "photos of the dish
+                // are inaccurate"): this used to prefer the legacy `thumb` column over the
+                // real `image` the restaurant actually uploads today through the item form
+                // (routes/items.js /create, /update). `thumb` is leftover from the original
+                // recovered database (see migrations_local/0001) and, wherever it happens to
+                // still hold a value, silently overrode any real photo the owner uploaded --
+                // the POS screen showed the stale/wrong picture no matter what was set in the
+                // menu admin screen (which always read `image` directly, never `thumb`, so
+                // the two screens disagreed). Now prefers the real, current `image`, and only
+                // falls back to the legacy `thumb` for an item that has never had a real photo
+                // uploaded at all.
+                image: rest.image ? rest.image : rest.thumb,
                 catName: category ? category.catName : null,
-                taxAmount: rest.tax && rest.tax!=='null'? (rest.price.replace(/\s+/g, '')?.replace(",",'.') * parseFloat(rest.tax) / 100).toFixed(2) : 0.00
+                taxAmount: calculateInclusiveTax(rest.price, rest.tax).toFixed(2)
             }))
         })
 
@@ -128,12 +140,18 @@ router.get('/last-active-session', fetchuser, async(req, res)=> {
 router.post('/create-customer', fetchuser, async (req, res )=> {
     try
     {
+        // Loyalty subsystem (project audit 2026-09-15): every new customer gets a scannable
+        // code immediately, so a printable loyalty card can be issued the same day they sign
+        // up rather than needing a separate backfill step later.
+        const { generateCustomerCode } = require('../services/loyaltyService');
+        const customerCode = await generateCustomerCode(req.body.tenant_id);
         await Customer.query().insertAndFetch({
             name: req.body.first_name+" "+req.body.last_name,
             email: req.body.email,
             phone: req.body.phone,
             note: req.body.note,
-            tenant_id: req.body.tenant_id
+            tenant_id: req.body.tenant_id,
+            customer_code: customerCode
         });
         const customers = await Customer.query().where('tenant_id', req.body.tenant_id).orderBy('id','desc').select(['id','name','email','phone']);
 

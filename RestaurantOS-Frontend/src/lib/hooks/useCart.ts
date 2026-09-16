@@ -2,8 +2,18 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { CartLine, MenuItem } from '@/lib/types';
+import { calculateInclusiveTax } from '@/lib/tax';
 
-const TAX_RATE = 0.09; // BTW low rate default; real rate comes from the tax module per-item later.
+// CRITICAL BUG FIX (project audit 2026-09-16, live at the POS checkout -- found from a
+// direct user report: "tax is still being calculated in POS billing"): this used to hardcode
+// a flat 9% and ADD it on top of the cart's line prices ("total = subtotal + subtotal*0.09"),
+// then charge that inflated `total` for real via chargeOrder(). Every item's `price` in this
+// app is already VAT-inclusive (Dutch pricing law -- see backend utils/tax.js and this same
+// bug's other half, already fixed there), so this was overcharging every single sale by
+// ~9% on top of the correct, already-inclusive price -- a real money bug, not just a display
+// one. Fixed to break the existing (unchanged) line-price total down into its net/VAT
+// components using each item's OWN configured tax rate, instead of inventing a second tax
+// on top of prices that already contain it.
 
 // Every cart line gets a stable, unique key -- plain (non-weight) items still merge into a
 // single line per product (matches the original behavior), but a weight-based item gets a
@@ -72,12 +82,22 @@ export function useCart() {
     setLines(restored);
   }, []);
 
-  const subtotal = useMemo(
+  // `total` is the real, VAT-inclusive amount actually charged -- exactly the sum of each
+  // line's (already-inclusive) price, unchanged from before this fix. `tax` and `subtotal`
+  // are purely a breakdown of that same total for the receipt, never added to it.
+  const total = useMemo(
     () => lines.reduce((sum, l) => sum + l.item.price * (l.weight ?? l.qty), 0),
     [lines]
   );
-  const tax = useMemo(() => subtotal * TAX_RATE, [subtotal]);
-  const total = useMemo(() => subtotal + tax, [subtotal, tax]);
+  const tax = useMemo(
+    () =>
+      lines.reduce((sum, l) => {
+        const lineTotal = l.item.price * (l.weight ?? l.qty);
+        return sum + calculateInclusiveTax(lineTotal, l.item.tax);
+      }, 0),
+    [lines]
+  );
+  const subtotal = useMemo(() => total - tax, [total, tax]);
 
   return { lines, addItem, addWeighedItem, setQty, removeItem, clear, loadFromQuantities, subtotal, tax, total };
 }

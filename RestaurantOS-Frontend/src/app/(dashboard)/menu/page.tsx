@@ -1,11 +1,51 @@
 'use client';
 
-import { useState } from 'react';
+/**
+ * Menu UX refinement (project audit 2026-09-15, task #36): replaced the plain data table
+ * with searchable product cards (matching the visual language the POS screen's ProductGrid
+ * already established), added a real image-fallback pattern, and surfaced the VAT-inclusive
+ * tax breakdown on every card now that item.tax is actually reachable end-to-end (see
+ * ItemFormModal.tsx and the backend's utils/tax.js). Inline stock/POS-visibility editing and
+ * the category-management form are preserved unchanged (Preservation Contract) -- just
+ * restyled onto the shared design-system tokens (surface/border/ink) from task #33, which
+ * this screen had not yet been migrated onto.
+ *
+ * Modifiers and spice levels (also named in task #36's brief) are intentionally NOT faked
+ * here: there is no backend schema for either yet (no modifier_groups/modifiers tables, no
+ * spice_level column), so building UI for them now would just be inert. That's real
+ * follow-up scope, not something to sketch with fake state.
+ */
+import { useMemo, useState } from 'react';
 import { useMenu } from '@/lib/hooks/useMenu';
 import { createCategory, updateItemStock, toggleItemOnPos } from '@/lib/api';
+import { calculateInclusiveTax } from '@/lib/tax';
 import { Button } from '@/components/ui/Button';
+import { SearchInput } from '@/components/ui/SearchInput';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Spinner } from '@/components/ui/Spinner';
 import { ItemFormModal } from './components/ItemFormModal';
 import { MenuItem } from '@/lib/types';
+import clsx from 'clsx';
+
+function ItemThumb({ item }: { item: MenuItem }) {
+  const [broken, setBroken] = useState(false);
+  if (!item.image || broken) {
+    return (
+      <div className="mb-2 flex h-24 w-full items-center justify-center rounded-lg bg-surface-sunken text-3xl">
+        🍽️
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`/images/${item.image}`}
+      alt={item.name}
+      onError={() => setBroken(true)}
+      className="mb-2 h-24 w-full rounded-lg object-cover"
+    />
+  );
+}
 
 export default function MenuPage() {
   const { categories, items, loading, error } = useMenu();
@@ -15,11 +55,21 @@ export default function MenuPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [localItems, setLocalItems] = useState(items);
   const [editingItem, setEditingItem] = useState<MenuItem | 'new' | null>(null);
+  const [query, setQuery] = useState('');
+  const [activeCategory, setActiveCategory] = useState<number | 'all'>('all');
 
   // Keep a local, optimistically-editable copy once the real data has loaded.
   if (localItems.length === 0 && items.length > 0) {
     setLocalItems(items);
   }
+
+  const filteredItems = useMemo(() => {
+    return localItems.filter((it) => {
+      const matchesCategory = activeCategory === 'all' || it.category_id === activeCategory;
+      const matchesQuery = it.name.toLowerCase().includes(query.trim().toLowerCase());
+      return matchesCategory && matchesQuery;
+    });
+  }, [localItems, activeCategory, query]);
 
   async function handleCreateCategory(e: React.FormEvent) {
     e.preventDefault();
@@ -66,23 +116,43 @@ export default function MenuPage() {
   return (
     <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-neutral-900">Menu</h1>
+        <h1 className="text-xl font-semibold text-ink">Menu</h1>
         <Button onClick={() => setEditingItem('new')}>+ New item</Button>
       </div>
 
-      {loading && <p className="text-neutral-400">Loading menu…</p>}
+      {loading && (
+        <div className="flex items-center gap-2 text-ink-muted">
+          <Spinner /> Loading menu…
+        </div>
+      )}
       {error && <p className="text-red-600">{error}</p>}
       {actionError && <p className="text-red-600">{actionError}</p>}
 
       {!loading && !error && (
         <>
           <section>
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Categories</h2>
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-muted">Categories</h2>
             <div className="mb-3 flex flex-wrap gap-2">
+              <button
+                onClick={() => setActiveCategory('all')}
+                className={clsx(
+                  'touch-target rounded-full px-4 text-sm font-medium transition-colors',
+                  activeCategory === 'all' ? 'bg-brand text-white' : 'bg-surface-sunken text-ink hover:bg-border'
+                )}
+              >
+                All
+              </button>
               {categories.map((c) => (
-                <span key={c.id} className="rounded-full bg-neutral-200 px-3 py-1.5 text-sm text-neutral-700">
+                <button
+                  key={c.id}
+                  onClick={() => setActiveCategory(c.id)}
+                  className={clsx(
+                    'touch-target rounded-full px-4 text-sm font-medium transition-colors',
+                    activeCategory === c.id ? 'bg-brand text-white' : 'bg-surface-sunken text-ink hover:bg-border'
+                  )}
+                >
                   {c.name}
-                </span>
+                </button>
               ))}
             </div>
             <form onSubmit={handleCreateCategory} className="flex max-w-sm gap-2">
@@ -90,7 +160,7 @@ export default function MenuPage() {
                 value={newCategory}
                 onChange={(e) => setNewCategory(e.target.value)}
                 placeholder="New category name"
-                className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                className="touch-target flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               />
               <Button type="submit" disabled={creating}>
                 {creating ? 'Adding…' : 'Add'}
@@ -99,33 +169,79 @@ export default function MenuPage() {
           </section>
 
           <section className="min-h-0 flex-1">
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Items</h2>
-            <div className="overflow-auto rounded-xl border border-neutral-200 bg-white">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
-                  <tr>
-                    <th className="px-4 py-2">Item</th>
-                    <th className="px-4 py-2">Category</th>
-                    <th className="px-4 py-2 text-right">Price</th>
-                    <th className="px-4 py-2 text-right">Stock</th>
-                    <th className="px-4 py-2 text-center">On POS</th>
-                    <th className="px-4 py-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {localItems.map((item) => (
-                    <tr key={item.id} className="border-t border-neutral-100">
-                      <td className="px-4 py-2 font-medium">
-                        {item.name}
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-muted">Items</h2>
+              <SearchInput value={query} onChange={setQuery} placeholder="Search items…" className="max-w-xs" />
+            </div>
+
+            {filteredItems.length === 0 ? (
+              <EmptyState
+                icon="🍽️"
+                title={localItems.length === 0 ? 'No items yet' : 'No items match'}
+                description={
+                  localItems.length === 0
+                    ? 'Add your first menu item to get started.'
+                    : 'Try a different search term or category.'
+                }
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {filteredItems.map((item) => {
+                  const taxAmount = item.tax ? calculateInclusiveTax(item.price, item.tax) : 0;
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex flex-col rounded-xl border border-border bg-surface p-3 shadow-sm"
+                    >
+                      <ItemThumb item={item} />
+                      <span className="font-medium text-ink">{item.name}</span>
+                      <span className="mt-0.5 text-sm text-ink-muted">{item.catName ?? 'Uncategorized'}</span>
+
+                      <div className="mt-2 flex items-baseline gap-1">
+                        <span className="text-lg font-semibold text-brand">€{Number(item.price).toFixed(2)}</span>
                         {Boolean(item.sold_by_weight) && (
-                          <span className="ml-2 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-500">
-                            ⚖ /{item.weight_unit || 'kg'}
+                          <span className="text-xs font-normal text-ink-muted">/ {item.weight_unit || 'kg'}</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-ink-muted">
+                        {item.tax ? `incl. €${taxAmount.toFixed(2)} VAT` : 'no VAT set'}
+                      </span>
+
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {Boolean(item.sold_by_weight) && (
+                          <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-[11px] font-medium text-ink-muted">
+                            ⚖ Sold by weight
                           </span>
                         )}
-                      </td>
-                      <td className="px-4 py-2 text-neutral-500">{item.catName}</td>
-                      <td className="px-4 py-2 text-right">€{Number(item.price).toFixed(2)}</td>
-                      <td className="px-4 py-2 text-right">
+                        {!item.tax && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                            ⚠ No VAT rate
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2">
+                        <label className="flex items-center gap-1 text-xs text-ink-muted">
+                          <input
+                            type="checkbox"
+                            checked={!!item.pos}
+                            disabled={busyId === item.id}
+                            onChange={() => handleTogglePos(item.id, !!item.pos)}
+                          />
+                          On POS
+                        </label>
+                        <button
+                          onClick={() => setEditingItem(item)}
+                          className="text-sm text-brand hover:underline"
+                        >
+                          Edit
+                        </button>
+                      </div>
+
+                      <div className="mt-2">
+                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+                          Stock
+                        </label>
                         <input
                           type="number"
                           defaultValue={item.quantity}
@@ -134,37 +250,14 @@ export default function MenuPage() {
                             const val = parseInt(e.target.value, 10);
                             if (!Number.isNaN(val) && val !== item.quantity) handleStockChange(item.id, val);
                           }}
-                          className="w-20 rounded border border-neutral-300 px-2 py-1 text-right"
+                          className="w-full rounded border border-border bg-surface-sunken px-2 py-1 text-sm text-ink"
                         />
-                      </td>
-                      <td className="px-4 py-2 text-center">
-                        <input
-                          type="checkbox"
-                          checked={!!item.pos}
-                          disabled={busyId === item.id}
-                          onChange={() => handleTogglePos(item.id, !!item.pos)}
-                        />
-                      </td>
-                      <td className="px-4 py-2 text-right">
-                        <button
-                          onClick={() => setEditingItem(item)}
-                          className="text-sm text-brand hover:underline"
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {localItems.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-12 text-center text-neutral-400">
-                        No items yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         </>
       )}

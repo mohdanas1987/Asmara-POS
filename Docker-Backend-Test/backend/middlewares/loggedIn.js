@@ -22,6 +22,15 @@ const loggedIn= (req, res , next)=> {
         // issued before this change that don't carry a tenant_id yet -- so already-logged-in
         // sessions don't get logged out by this change.
         req.body.tenant_id = data.user.tenant_id ?? 1;
+        // RBAC (project audit 2026-09-15): the token's role lives on req.authRole, NOT
+        // req.body.role -- routes like POST /users legitimately use `role` in the request
+        // body to mean "the role to assign the new staff member," and overwriting that field
+        // silently corrupted those requests (found via a real failing test, not guessed at).
+        // req.authRole is a separate property no request body will ever collide with, and a
+        // client can never set it themselves since nothing here ever reads it from req.body.
+        // Fallback to 'admin' for tokens issued before roles existed, so already-logged-in
+        // sessions keep exactly the access they had before this change (Preservation Contract).
+        req.authRole = data.user.role ?? 'admin';
         next();
 
     } catch (err){

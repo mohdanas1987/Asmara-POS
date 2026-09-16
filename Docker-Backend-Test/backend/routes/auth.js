@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Tenant = require('../models/Tenant');
 const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
+const KitchenStation = require('../models/KitchenStation'); // kitchen ticket routing (project audit 2026-09-15)
 const router = express.Router();
 const { body, validationResult }=require('express-validator')
 const bcrypt= require('bcrypt');
@@ -116,6 +117,7 @@ router.post('/signup-tenant', [
                 email: req.body.email.toLowerCase().trim(),
                 password: hashedPassword,
                 type: 'admin',
+                role: 'admin', // RBAC (project audit 2026-09-15): first user of a new tenant is always admin
                 tenant_id: newTenant.id,
             });
 
@@ -133,10 +135,20 @@ router.post('/signup-tenant', [
                 status: 'trialing',
             });
 
+            // Kitchen ticket routing (project audit 2026-09-15): migration 0009's backfill
+            // only ran once, for tenants that already existed at migration time -- a brand
+            // new tenant created here afterwards needs its own default station too, or
+            // routeOrderToKitchen() would have nowhere to send its first order.
+            await KitchenStation.query(trx).insert({
+                tenant_id: newTenant.id,
+                name: 'Main Kitchen',
+                is_default: true,
+            });
+
             return { tenant: newTenant, user: newUser, subscription: newSubscription };
         });
 
-        const authToken = jwt.sign({ user: { id: user.id, tenant_id: tenant.id } }, JWT_SECRET);
+        const authToken = jwt.sign({ user: { id: user.id, tenant_id: tenant.id, role: user.role || 'admin' } }, JWT_SECRET); // RBAC (project audit 2026-09-15)
 
         return res.json({
             status: true,
@@ -180,10 +192,15 @@ router.post('/login',[
         // Phase 1 / Task #10 (multi-tenant foundation): embed the user's tenant in the
         // JWT so every downstream route (via middlewares/loggedIn.js) knows which restaurant
         // this request belongs to, without trusting anything the client sends.
+        // RBAC (project audit 2026-09-15): embed the resolved role in the JWT so
+        // requirePermission() has a trustworthy source -- falls back to the legacy `type`
+        // column for any account that predates the `role` column, then to 'admin' so no
+        // existing account loses access it already had (Preservation Contract).
         const payload = {
             user : {
                 id : user.id,
-                tenant_id: user.tenant_id
+                tenant_id: user.tenant_id,
+                role: user.role || user.type || 'admin'
             }
         }
 

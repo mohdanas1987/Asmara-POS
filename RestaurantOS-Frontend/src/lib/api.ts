@@ -169,6 +169,29 @@ export async function freeAllTables() {
   return apiFetch<{ status: boolean; message: string }>('/tables/free-all', { method: 'POST' });
 }
 
+// Table/Floor management redesign (project audit 2026-09-15): frees only the given table(s)
+// ("1" or a merged group like "1+2"), as opposed to freeAllTables() which resets the whole floor.
+export async function freeSelectedTables(tableNumbers: string[]) {
+  return apiFetch<{ status: boolean; message: string }>(
+    `/tables/free/${encodeURIComponent(tableNumbers.join('+'))}`,
+    { method: 'POST' }
+  );
+}
+
+export async function mergeTables(tableNumbers: string[]) {
+  return apiFetch<{ status: boolean; message: string; link: string }>(
+    `/orders/link/${encodeURIComponent(tableNumbers.join('+'))}`,
+    { method: 'POST' }
+  );
+}
+
+export async function updateTableDetails(tableNumber: string, details: { capacity?: number; section?: string }) {
+  return apiFetch<{ status: boolean; message: string }>(
+    `/tables/${encodeURIComponent(tableNumber)}/details`,
+    { method: 'PATCH', body: JSON.stringify(details) }
+  );
+}
+
 // --- Orders (routes/orders.js GET /) ---
 
 export async function getOrders() {
@@ -263,6 +286,11 @@ export interface ItemFormInput {
   sold_by_weight?: boolean;
   weight_unit?: 'kg' | 'g' | 'lb';
   image?: File | null;
+  // Menu UX refinement (task #36): the raw tax rate string ("9%", "9") copied from the
+  // tenant's selected TaxRate.amount -- see routes/tax.js and utils/tax.js. Both
+  // /items/create and /items/update now persist this (previously /create silently dropped
+  // it, and no UI ever offered a way to set it at all).
+  tax?: string;
 }
 
 export async function createItem(input: ItemFormInput) {
@@ -273,6 +301,7 @@ export async function createItem(input: ItemFormInput) {
   if (input.category_id) form.set('category_id', String(input.category_id));
   form.set('sold_by_weight', String(!!input.sold_by_weight));
   form.set('weight_unit', input.weight_unit || 'kg');
+  if (input.tax) form.set('tax', input.tax);
   if (input.image) form.set('image', input.image);
   return apiFetchForm<{ status: boolean; message: string; product: import('./types').MenuItem }>(
     '/items/create',
@@ -290,8 +319,15 @@ export async function updateItem(id: number, input: ItemFormInput & { code: stri
   if (input.category_id) form.set('category_id', String(input.category_id));
   form.set('sold_by_weight', String(!!input.sold_by_weight));
   form.set('weight_unit', input.weight_unit || 'kg');
+  if (input.tax) form.set('tax', input.tax);
   if (input.image) form.set('uploaded', input.image);
   return apiFetchForm<{ status: boolean; updated: import('./types').MenuItem }>('/items/update', form);
+}
+
+// --- Tax rates (routes/tax.js) ---
+
+export async function getTaxes() {
+  return apiFetch<{ status: boolean; taxes: import('./types').TaxRate[] }>('/tax');
 }
 
 // --- Customers (routes/pos.js) ---
@@ -466,6 +502,55 @@ export async function sendTableOrderToKitchen(
 export async function cancelOrder(orderId: number | string, tables: string) {
   return apiFetch<{ status: boolean; message: string }>(
     `/orders/cancel/${orderId}/${encodeURIComponent(tables)}`,
+    { method: 'POST' }
+  );
+}
+
+// Offline-first foundation (project audit 2026-09-15): powers the TopBar's sync indicator --
+// how many outbound deliveries (to peer terminals, cloud, payments, website) are still
+// pending or have permanently failed, so staff see "syncing" / "sync issue" instead of the
+// app silently falling behind with no visible sign anything is wrong.
+export async function getSyncStatus() {
+  return apiFetch<{ status: boolean; outbox: Array<{ target_type: string; status: string; count: number }> }>(
+    '/sync/status'
+  );
+}
+
+// --- Billing & payments completeness (task #37) ---
+// Real per-order payment ledger: split/partial charge history, refunds, and voids. See the
+// backend's services/payments/paymentLedger.js and migrations_local/0013 for the full
+// rationale -- routes/orders.js's /create and /payment-update now record into this ledger
+// instead of just stamping "paid" on the order unconditionally.
+
+export interface PaymentTransaction {
+  id: number;
+  order_id: string;
+  type: 'charge' | 'refund' | 'void';
+  method: string;
+  amount: string;
+  status: 'succeeded' | 'voided';
+  refunds_transaction_id?: number | null;
+  provider_reference?: string | null;
+  note?: string | null;
+  created_at: string;
+}
+
+export async function getOrderPayments(orderId: string | number) {
+  return apiFetch<{ status: boolean; transactions: PaymentTransaction[]; netPaid: number }>(
+    `/orders/${orderId}/payments`
+  );
+}
+
+export async function refundOrder(orderId: string | number, amount: number, reason?: string) {
+  return apiFetch<{ status: boolean; message: string; transaction: PaymentTransaction; netPaid: number }>(
+    `/orders/${orderId}/refund`,
+    { method: 'POST', body: JSON.stringify({ amount, reason }) }
+  );
+}
+
+export async function voidPaymentTransaction(transactionId: number) {
+  return apiFetch<{ status: boolean; message: string; transaction: PaymentTransaction }>(
+    `/orders/payments/${transactionId}/void`,
     { method: 'POST' }
   );
 }

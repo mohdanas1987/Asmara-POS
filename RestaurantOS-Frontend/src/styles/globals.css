@@ -2,10 +2,63 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * POS design system (project audit 2026-09-15, task "POS design system pass").
+ * Every color a screen uses should come from one of these tokens (via the `surface`,
+ * `border`, `ink` Tailwind colors defined in tailwind.config.ts) rather than a hardcoded
+ * `bg-white` / `text-neutral-900` -- that hardcoding is exactly why the audit found five
+ * screens that would each look different once dark mode or a brand re-theme was needed.
+ * RGB triples (not hex) because Tailwind's `rgb(var(--x) / <alpha-value>)` pattern needs
+ * space-separated channel values to support opacity modifiers like `bg-surface/50`.
+ */
 :root {
   color-scheme: light;
+  --surface: 255 255 255; /* white */
+  --surface-raised: 249 250 251; /* neutral-50, e.g. hover rows */
+  --surface-sunken: 243 244 246; /* neutral-100, e.g. input backgrounds */
+  --border: 229 231 235; /* neutral-200 */
+  --ink: 17 24 39; /* neutral-900 */
+  --ink-muted: 107 114 128; /* neutral-500 */
+}
+
+.dark {
+  color-scheme: dark;
+  --surface: 24 24 27; /* zinc-900 */
+  --surface-raised: 39 39 42; /* zinc-800 */
+  --surface-sunken: 9 9 11; /* zinc-950, recessed inputs read as "deeper" than the page */
+  --border: 63 63 70; /* zinc-700 */
+  --ink: 244 244 245; /* zinc-100 */
+  --ink-muted: 161 161 170; /* zinc-400 */
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 antialiased;
+  @apply bg-surface text-ink antialiased;
+}
+
+/* A touch target smaller than 44x44px is the single most common reason a POS "feels
+ * cheap" on a real touchscreen -- fat-fingering the wrong menu item during dinner rush is
+ * exactly the kind of thing the plan's "touch targets" requirement exists to prevent. Any
+ * interactive element can opt in with this class instead of every component re-deriving
+ * the same min-h-11 min-w-11 pair. */
+.touch-target {
+  @apply min-h-touch min-w-touch;
+}
+
+/* Table/Floor management redesign (project audit 2026-09-15): scope window.print() (used by
+ * BillPreviewDialog's Print button) to only the bill content, not the whole floor-plan page
+ * behind it. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #bill-preview-printable,
+  #bill-preview-printable * {
+    visibility: visible;
+  }
+  #bill-preview-printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
 }

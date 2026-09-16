@@ -5,6 +5,10 @@ const Order = require('../models/Order');
 const Reservation = require('../models/Reservation');
 const fetchuser = require('../middlewares/loggedIn');
 const { logger } = require('../utils/logger');
+const { recordChange } = require('../services/offline/syncLog');
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
+const { body, validationResult } = require('express-validator');
 const router = express.Router();
 
 let error = { status: false, message: 'Something went wrong!' }
@@ -28,7 +32,7 @@ router.get('/', fetchuser, async (req, res) => {
             reserved: 'primary',
             'order ongoing': 'warning'
         }
-        const tables = await Table.query().where('tenant_id', req.body.tenant_id).select(['id', 'table_number', 'length', 'width', 'x', 'y', 'status', 'linked_to']);
+        const tables = await Table.query().where('tenant_id', req.body.tenant_id).select(['id', 'table_number', 'length', 'width', 'x', 'y', 'status', 'linked_to', 'capacity', 'section']);
         return res.json({
             status: true,
             tables: tables.map(t => ({ ...t, className: cls[t.status] ?? 'danger' }))
@@ -147,6 +151,48 @@ router.post('/free-all', fetchuser, freeAllHandler);
 // compiled frontend has no UI for it yet (its source is not available to add one in this
 // stage) -- it is reachable today via a direct API call, and ready for a UI once the
 // frontend is rebuilt.
+// Table/Floor management redesign (project audit 2026-09-15): seat count and section are
+// floor-plan SETUP, not day-to-day POS operation, so this is gated by settings.manage (same
+// tier as kitchen station configuration) rather than tables.manage.
+router.patch('/:table_number/details', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), [
+    body('capacity').optional({ nullable: true }).isInt({ min: 1 }),
+    body('section').optional({ nullable: true }).isString(),
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ status: false, message: errors.array()[0].msg });
+
+        const table = await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', req.params.table_number).first();
+        if (!table) return res.status(404).json({ status: false, message: `Table ${req.params.table_number} not found.` });
+
+        const updates = {};
+        if (req.body.capacity !== undefined) updates.capacity = req.body.capacity;
+        if (req.body.section !== undefined) updates.section = req.body.section;
+        await Table.query().where('id', table.id).update(updates);
+        return res.json({ status: true, message: 'Table details updated.' });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
+// Frees one or more SPECIFIC tables (supports "1+2" for a merged group), as opposed to
+// /free-all which resets the entire floor -- the plan's "free selected" requirement.
+// Deliberately does not touch or cancel any order sitting on these tables (same caution as
+// the existing /free-all: a blunt status reset, not an order-completion flow -- use
+// /orders/finish or /orders/cancel for that).
+router.post('/free/:table_numbers', fetchuser, requirePermission(PERMISSIONS.TABLES_MANAGE), async (req, res) => {
+    try {
+        const tableNumbers = req.params.table_numbers.split('+');
+        const updated = await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tableNumbers).patch({
+            status: 'free',
+            linked_to: null,
+        });
+        return res.json({ status: true, message: `${tableNumbers.length === 1 ? 'Table' : 'Tables'} freed.`, updated });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
 router.post('/transfer', fetchuser, async (req, res) => {
     const { from_table, to_table } = req.body;
 
@@ -206,6 +252,24 @@ router.post('/transfer', fetchuser, async (req, res) => {
         });
 
         logger.info('table.transfer', { from_table, to_table, order_id: result.id, user_id: req.body.myID });
+
+        // Offline-first foundation (project audit 2026-09-15): record this as a change any
+        // other terminal in the restaurant can pull via GET /sync/changes, so a table
+        // transfer made on the front counter terminal is visible to the bar terminal too.
+        // Best-effort, same pattern as kitchen routing and loyalty earning above -- a
+        // logging failure here must never undo an already-committed table transfer.
+        try {
+            await recordChange({
+                tenantId,
+                terminalId: req.body.terminal_id || 'unknown-terminal',
+                entityType: 'table_transfer',
+                entityId: result.id,
+                operation: 'update',
+                payload: { from_table, to_table, order_id: result.id },
+            });
+        } catch (syncError) {
+            console.log('[offline-sync] non-fatal: could not record table transfer change:', syncError.message);
+        }
 
         return res.json({
             status: true,

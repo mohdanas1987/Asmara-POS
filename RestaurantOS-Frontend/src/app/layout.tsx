@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import '../styles/globals.css';
+import { ThemeProvider } from '@/lib/theme/ThemeProvider';
+import { ToastProvider } from '@/components/ui/Toast';
 
 export const metadata: Metadata = {
   title: 'RestaurantOS',
@@ -24,9 +26,15 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      {/* suppressHydrationWarning: ThemeProvider applies the .dark class on the client
+          after mount (see its comment for why), which briefly differs from the server-
+          rendered markup by design -- this is the documented, correct way to avoid a
+          false-positive hydration warning for exactly this pattern. */}
       <body>
-        {children}
+        <ThemeProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </ThemeProvider>
         <script
           // Registers the service worker so the app is installable (Add to Home Screen on
           // iOS/Android, "Install app" on desktop Chrome/Edge) on Windows, macOS, Linux,

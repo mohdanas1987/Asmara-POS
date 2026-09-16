@@ -21,6 +21,16 @@ export interface MenuCategory {
   name: string;
 }
 
+// Menu UX refinement (task #36): a tenant's configured VAT/tax rates (routes/tax.js).
+// `amount` is the raw string this app has always stored tax as elsewhere ("9%", "9"), and is
+// exactly what gets copied into MenuItem.tax when an item is assigned this rate.
+export interface TaxRate {
+  id: number;
+  name: string;
+  amount: string;
+  status: boolean | number;
+}
+
 export interface CartLine {
   item: MenuItem;
   qty: number;
@@ -67,6 +77,9 @@ export interface TableRow {
   status: string;
   className: 'success' | 'primary' | 'warning' | 'danger' | string;
   linked_to?: number | null;
+  // Table/Floor management redesign (project audit 2026-09-15).
+  capacity?: number | null;
+  section?: string | null;
 }
 
 export interface OrderRow {
@@ -95,6 +108,9 @@ export interface TableOrderInfo {
   taste?: string | null;
   total?: number | null;
   note?: string | null;
+  // Table/Floor management redesign (project audit 2026-09-15): powers the elapsed-time
+  // display ("seated 42m ago") on each occupied table.
+  created_at?: string;
 }
 
 export interface OrdersResponse {

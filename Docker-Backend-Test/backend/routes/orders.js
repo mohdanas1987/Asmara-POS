@@ -11,6 +11,25 @@ const fs = require('fs');
 
 const { europeanDate, keys, generateReport } = require('../utils');
 const { nonKitchenItems } = require("../utils/constants");
+const { routeOrderToKitchen } = require('../services/kitchenRouting');
+const loyalty = require('../services/loyaltyService');
+const { recordChange } = require('../services/offline/syncLog');
+const { calculateInclusiveTax } = require('../utils/tax');
+const paymentLedger = require('../services/payments/paymentLedger');
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
+
+// Billing & payments completeness (task #37): both /create and /payment-update accept a
+// `modes` object shaped like { cash: 12.50 } or { card: 12.50 }, or (for the app's existing,
+// undocumented split-payment convention) { <method>: amount, ..., modes: <nested> } when
+// payment_mode contains a comma. This turns that object into real ledger charge rows without
+// requiring the frontend to change how it calls these routes at all.
+function chargesFromModes(modes) {
+    if (!modes || typeof modes !== 'object') return [];
+    return Object.entries(modes)
+        .filter(([key, value]) => key !== 'modes' && Number(value) > 0)
+        .map(([method, amount]) => ({ method, amount: Number(amount) }));
+}
 
 let error = { status: false, message: 'Something went wrong!' }
 
@@ -46,7 +65,11 @@ router.get('/', fetchuser, async (req, res) => {
                 payment: order.payment_status,
                 taste: order.taste,
                 total: order.total,
-                note: order.note
+                note: order.note,
+                // Table/Floor management redesign (project audit 2026-09-15): elapsed time
+                // ("table 5 has been seated for 42 minutes") needs when the order actually
+                // started, not just its current state.
+                created_at: order.created_at
             };
         }
     });
@@ -105,6 +128,24 @@ async function finishOrderHandler(req, res) {
             linked_to: null
         });
 
+        // Loyalty subsystem (project audit 2026-09-15): earn points on a completed order,
+        // best-effort like kitchen routing above -- a customer not being attached to this
+        // order (the common case for walk-ins) or any other loyalty-side issue must never
+        // stop the order from completing and the table from freeing up.
+        try {
+            if (order.customer_id) {
+                await loyalty.earnForOrder({
+                    tenantId: req.body.tenant_id,
+                    customerId: order.customer_id,
+                    orderId: order.id,
+                    orderTotalEuros: order.total,
+                    createdBy: req.body.myID,
+                });
+            }
+        } catch (loyaltyError) {
+            console.log('[loyalty] non-fatal: could not earn points for order', order.id, loyaltyError.message);
+        }
+
         return res.json({
             status: true,
             message: "Order completed & table freed!",
@@ -139,6 +180,25 @@ async function acceptOrderHandler(req, res) {
         }
         const io = req.app.get('io');
         if (io) io.emit('order-to-kitchen', { order });
+
+        // Kitchen ticket routing (project audit 2026-09-15): same best-effort routing as
+        // /to-kitchen above, applied to online/tableless orders' {items: [{id, qty}]} shape.
+        try {
+            const { items: onlineItems } = JSON.parse(order.data || '{}');
+            const routedItems = (onlineItems || []).map((it) => ({ id: it.id, quantity: it.qty ?? it.quantity ?? 1 }));
+            if (routedItems.length > 0) {
+                const tickets = await routeOrderToKitchen({
+                    tenantId: req.body.tenant_id,
+                    orderId: order.id,
+                    tableNumber: order.tables,
+                    items: routedItems,
+                });
+                if (io && tickets.length > 0) io.emit('kitchen-ticket-created', { tickets });
+            }
+        } catch (routingError) {
+            console.log('[kitchen-routing] non-fatal: could not create station tickets:', routingError.message);
+        }
+
         return res.json({ status: true, message: 'Order accepted -- sent to kitchen!', order });
     } catch (error) {
         return res.json({ status: false, message: error.message });
@@ -189,18 +249,36 @@ router.post('/create', fetchuser, async (req, res) => {
             payment_mode: req.body.payment_mode,
             data: JSON.stringify(modes),
             cash_register_id: lastSession ?? req.body.cash_register_id,
-            payment_status: "paid"
+            // BUG FIX (task #37): this used to hardcode "paid" unconditionally here, so an
+            // underpayment (or a future partial/split payment) was silently marked fully paid
+            // with no record of what was actually collected. Now recorded as real ledger
+            // transactions below and re-derived from them -- the common case (one charge
+            // covering the full total) still resolves to "paid", unchanged.
+            payment_status: "pending"
         };
 
         if(req.body.extra) {
             payload.added_total = null
         }
 
-        const order = await Order.query().patchAndFetchById(req.body.order_id, payload).where('tenant_id', req.body.tenant_id);
+        let order = await Order.query().patchAndFetchById(req.body.order_id, payload).where('tenant_id', req.body.tenant_id);
 
         if (!order) {
             throw new Error('Error creating order');
         }
+
+        const charges = chargesFromModes(modes);
+        if (charges.length > 0) {
+            await paymentLedger.recordCharges({
+                tenantId: req.body.tenant_id,
+                orderId: order.id,
+                payments: charges,
+                createdBy: req.body.myID,
+            });
+        }
+        const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: order.id });
+        const derivedStatus = paymentLedger.deriveStatus(netPaid, order.total);
+        order = await Order.query().patchAndFetchById(order.id, { payment_status: derivedStatus }).where('tenant_id', req.body.tenant_id);
 
         if (req.body.data) {
             await CashRegister.query().findById(lastSession).where('tenant_id', req.body.tenant_id).patch({
@@ -225,13 +303,31 @@ router.post('/create', fetchuser, async (req, res) => {
     }
 })
 
-router.get('/link/:tables', fetchuser, async (req, res) => {
-
+// Table/Floor management redesign (project audit 2026-09-15): kept the original GET route
+// working unchanged (STAGE 2/19's established pattern for a legacy GET-as-mutation this
+// codebase already uses elsewhere -- see /tables' free-all/split-table for the same
+// treatment) and added a correctly-verbed POST alongside it, plus sync-log recording so a
+// merge made on one terminal is visible to every other terminal in the restaurant.
+async function linkTablesHandler(req, res) {
     try {
         let link = req.params.tables;
-        await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', link.split("+")).patch({
+        const tableNumbers = link.split("+");
+        await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tableNumbers).patch({
             linked_to: link
         });
+
+        try {
+            await recordChange({
+                tenantId: req.body.tenant_id,
+                terminalId: req.body.terminal_id || 'unknown-terminal',
+                entityType: 'table_merge',
+                entityId: link,
+                operation: 'update',
+                payload: { tables: tableNumbers, linked_to: link },
+            });
+        } catch (syncError) {
+            console.log('[offline-sync] non-fatal: could not record table merge change:', syncError.message);
+        }
 
         return res.json({
             status: true,
@@ -245,8 +341,9 @@ router.get('/link/:tables', fetchuser, async (req, res) => {
             message: error.message
         });
     }
-
-});
+}
+router.get('/link/:tables', fetchuser, linkTablesHandler);
+router.post('/link/:tables', fetchuser, linkTablesHandler);
 
 router.get('/init/:table', fetchuser, async (req, res) => {
     try {
@@ -363,6 +460,26 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
         if (order.status === 'in-kitchen') {
             const io = req.app.get('io');
             if (io) io.emit('order-to-kitchen', { order });
+
+            // Kitchen ticket routing (project audit 2026-09-15): split into per-station
+            // tickets alongside the existing order-status flow above. Deliberately
+            // best-effort -- a routing failure (e.g. no stations configured yet for a very
+            // old tenant that predates migration 0009) must never stop the order from
+            // reaching the kitchen the way it always has.
+            try {
+                const routedItems = Object.entries(updatedQt).map(([id, quantity]) => ({ id, quantity }));
+                if (routedItems.length > 0) {
+                    const tickets = await routeOrderToKitchen({
+                        tenantId: req.body.tenant_id,
+                        orderId: order.id,
+                        tableNumber: order.tables,
+                        items: routedItems,
+                    });
+                    if (io && tickets.length > 0) io.emit('kitchen-ticket-created', { tickets });
+                }
+            } catch (routingError) {
+                console.log('[kitchen-routing] non-fatal: could not create station tickets:', routingError.message);
+            }
         }
 
         return res.json({
@@ -388,11 +505,30 @@ router.post('/payment-update', fetchuser, async (req, res) => {
             modes = req.body.data;
         }
 
-        const order = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id).patch({
-            payment_status: "paid",
+        const existingOrder = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id);
+        if (!existingOrder) {
+            return res.json({ status: false, message: "Order not found." });
+        }
+
+        const charges = chargesFromModes(modes);
+        if (charges.length > 0) {
+            await paymentLedger.recordCharges({
+                tenantId: req.body.tenant_id,
+                orderId: existingOrder.id,
+                payments: charges,
+                createdBy: req.body.myID,
+            });
+        }
+        const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: existingOrder.id });
+        // BUG FIX (task #37): same hardcoded-"paid" issue as /create -- derived from the
+        // ledger now instead of assumed.
+        const derivedStatus = paymentLedger.deriveStatus(netPaid, existingOrder.total);
+
+        const order = await Order.query().patchAndFetchById(req.body.order_id, {
+            payment_status: derivedStatus,
             updated_at: europeanDate(),
             data: modes
-        });
+        }).where('tenant_id', req.body.tenant_id);
 
         return res.json({
             status: true,
@@ -405,6 +541,58 @@ router.post('/payment-update', fetchuser, async (req, res) => {
     }
 })
 
+// Billing & payments completeness (task #37): real refund and void support, and a way to see
+// an order's actual payment history -- none of this existed before (routes/payments.js only
+// ever fired a one-shot terminal charge with nothing persisted; see its own comments).
+
+router.get('/:order/payments', fetchuser, async (req, res) => {
+    try {
+        const ledger = await paymentLedger.getLedger({ tenantId: req.body.tenant_id, orderId: req.params.order });
+        const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: req.params.order });
+        return res.json({ status: true, transactions: ledger, netPaid });
+    } catch (error) {
+        return res.status(500).json({ status: false, message: error.message });
+    }
+});
+
+router.post('/:order/refund', fetchuser, requirePermission(PERMISSIONS.PAYMENTS_REFUND), async (req, res) => {
+    try {
+        const { amount, reason } = req.body;
+        const transaction = await paymentLedger.refund({
+            tenantId: req.body.tenant_id,
+            orderId: req.params.order,
+            amount,
+            reason,
+            createdBy: req.body.myID,
+        });
+        const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: req.params.order });
+        const order = await Order.query().where('tenant_id', req.body.tenant_id).findById(req.params.order);
+        let updatedOrder = order;
+        if (order) {
+            const derivedStatus = paymentLedger.deriveStatus(netPaid, order.total);
+            updatedOrder = await Order.query().patchAndFetchById(req.params.order, {
+                payment_status: netPaid <= 0 ? 'refunded' : derivedStatus,
+            }).where('tenant_id', req.body.tenant_id);
+        }
+        return res.json({ status: true, message: 'Refund recorded.', transaction, netPaid, order: updatedOrder });
+    } catch (error) {
+        return res.status(400).json({ status: false, message: error.message });
+    }
+});
+
+router.post('/payments/:transactionId/void', fetchuser, requirePermission(PERMISSIONS.PAYMENTS_REFUND), async (req, res) => {
+    try {
+        const voidRow = await paymentLedger.voidTransaction({
+            tenantId: req.body.tenant_id,
+            transactionId: req.params.transactionId,
+            createdBy: req.body.myID,
+        });
+        return res.json({ status: true, message: 'Transaction voided.', transaction: voidRow });
+    } catch (error) {
+        return res.status(400).json({ status: false, message: error.message });
+    }
+});
+
 router.get('/view-order/:id', fetchuser, async (req, res) => {
     try {
         let orderID = req.params.id;
@@ -415,7 +603,7 @@ router.get('/view-order/:id', fetchuser, async (req, res) => {
         const products = await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', keys(data?.quantity ?? {}));
         const pairs = {};
         products.forEach(pr => {
-            pr.taxAmount = pr.tax && pr.tax !== 'null' ? (pr.price.replace(/\s+/g, '')?.replace(",", '.') * parseFloat(pr.tax) / 100).toFixed(2) : 0.00;
+            pr.taxAmount = calculateInclusiveTax(pr.price, pr.tax).toFixed(2);
             pairs[pr.id] = pr;
         });
 
@@ -456,7 +644,7 @@ router.get(`/info/:order/:print?`, fetchuser, async (req, res) => {
         const pairs = [];
 
         products.forEach(pr => {
-            pr.taxAmount = pr.tax && pr.tax !== 'null' ? (pr.price.replace(/\s+/g, '')?.replace(",", '.') * parseFloat(pr.tax) / 100).toFixed(2) : 0.00;
+            pr.taxAmount = calculateInclusiveTax(pr.price, pr.tax).toFixed(2);
             pr.stock = data.quantity[pr.id];
             pr.note = data.note?.[pr.id] ?? "-";
             pr.taste = data.taste?.[pr.id] ?? "-";
@@ -518,7 +706,7 @@ router.get(`/last-order`, fetchuser, async (req, res) => {
         const products = await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', keys(data.quantity));
         const pairs = {};
         products.forEach(pr => {
-            pr.taxAmount = pr.tax && pr.tax !== 'null' ? (pr.price.replace(/\s+/g, '')?.replace(",", '.') * parseFloat(pr.tax) / 100).toFixed(2) : 0.00;
+            pr.taxAmount = calculateInclusiveTax(pr.price, pr.tax).toFixed(2);
             pairs[pr.id] = pr;
         });
 

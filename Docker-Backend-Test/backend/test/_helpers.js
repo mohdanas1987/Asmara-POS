@@ -32,7 +32,7 @@ async function setupTestApp(testName) {
     const salt = await bcrypt.genSalt(8);
     const password = await bcrypt.hash('Test1234!', salt);
     const [userId] = await knex('users').insert({
-        name: 'Test Admin', email: 'admin@test.local', password, type: 'admin', status: true
+        name: 'Test Admin', email: 'admin@test.local', password, type: 'admin', role: 'admin', status: true
     });
 
     await knex('tables').insert([
@@ -80,7 +80,7 @@ async function seedSecondTenant(request, app, knex) {
     const salt = await bcrypt.genSalt(8);
     const password = await bcrypt.hash('Test1234!', salt);
     const [userId] = await knex('users').insert({
-        name: 'Other Admin', email: 'admin2@test.local', password, type: 'admin', status: true,
+        name: 'Other Admin', email: 'admin2@test.local', password, type: 'admin', role: 'admin', status: true,
         tenant_id: tenantId
     });
 
@@ -95,4 +95,18 @@ async function seedSecondTenant(request, app, knex) {
     return { tenantId, userId, token: res.body.authToken };
 }
 
-module.exports = { setupTestApp, teardownTestApp, loginAsAdmin, seedSecondTenant };
+// RBAC (project audit 2026-09-15): seeds a staff member with a specific non-admin role in
+// the SAME tenant setupTestApp() already created, and logs them in, so tests can assert on
+// what each role can and cannot do against real routes.
+async function seedStaffUser(request, app, knex, { email, role, tenantId } = {}) {
+    const salt = await bcrypt.genSalt(8);
+    const password = await bcrypt.hash('Test1234!', salt);
+    const insert = { name: `Test ${role}`, email, password, type: role, role, status: true };
+    if (tenantId !== undefined) insert.tenant_id = tenantId;
+    await knex('users').insert(insert);
+
+    const res = await request(app).post('/auth/login').send({ email, password: 'Test1234!' });
+    return res.body.authToken;
+}
+
+module.exports = { setupTestApp, teardownTestApp, loginAsAdmin, seedSecondTenant, seedStaffUser };

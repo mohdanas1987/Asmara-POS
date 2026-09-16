@@ -337,7 +337,19 @@ const generateReport = async (payload) => {
                 const noNumberRegex = /^[^0-9]*$/
                 let cal = noNumberRegex.test(value) ? parseFloat(type ?? 0) : parseFloat(value ?? 0);
 
-                const applied = (cal / 100) * (d.price?.[id] ?? product.price);
+                // VAT-inclusive pricing (project audit 2026-09-15, task "Menu UX
+                // refinement"): this used to be `(cal / 100) * price`, the EXCLUSIVE-tax
+                // formula -- correct only if `price` does NOT already include VAT. Every
+                // menu price in this app IS VAT-inclusive (a Dutch restaurant's
+                // consumer-facing prices always are, and nothing is added to price at
+                // checkout -- confirmed by reading the actual payment code), so the VAT
+                // embedded in a price is `price * rate / (100 + rate)`, not
+                // `price * rate / 100`. The old formula overstated every X/Z report's VAT
+                // total. See utils/tax.js's calculateInclusiveTax for the shared version of
+                // this same fix used elsewhere; this call site keeps its own inline copy
+                // because it's already parsing a different "value type" tax string shape
+                // (e.g. "9 VAT") that utils/tax.js's parser doesn't handle.
+                const applied = (cal / (100 + cal)) * (d.price?.[id] ?? product.price);
 
                 totals.tax += applied;
                 const collection = taxes[type ?? 'VAT'];

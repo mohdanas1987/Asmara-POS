@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { getTables, updateTablePosition, transferTable, freeAllTables, getOrders, initTableOrder } from '@/lib/api';
+import { getTables, updateTablePosition, transferTable, freeAllTables, freeSelectedTables, mergeTables, getOrders, initTableOrder } from '@/lib/api';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 
 export function useTables() {
@@ -53,6 +53,24 @@ export function useTables() {
     await refresh();
   }, [refresh]);
 
+  // Table/Floor management redesign (project audit 2026-09-15): "free selected" (a manual
+  // reset for specific stuck/incorrect tables) as opposed to freeAll's whole-floor reset.
+  const freeSelected = useCallback(
+    async (tableNumbers: string[]) => {
+      await freeSelectedTables(tableNumbers);
+      await refresh();
+    },
+    [refresh]
+  );
+
+  const merge = useCallback(
+    async (tableNumbers: string[]) => {
+      await mergeTables(tableNumbers);
+      await refresh();
+    },
+    [refresh]
+  );
+
   // Clicking a table: free -> starts a brand-new order there (real backend call, locks the
   // table amber immediately). Occupied/ongoing -> resumes whichever order is already open
   // on it (looked up from GET /orders/'s tableOrders map -- no guessing, no separate fetch).
@@ -78,5 +96,5 @@ export function useTables() {
     [tableOrders, refresh]
   );
 
-  return { tables, tableOrders, loading, error, moveTable, transfer, freeAll, openTable, refresh };
+  return { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, openTable, refresh };
 }

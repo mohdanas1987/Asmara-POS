@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { MenuCategory, MenuItem } from '@/lib/types';
-import { createItem, updateItem } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { MenuCategory, MenuItem, TaxRate } from '@/lib/types';
+import { createItem, getTaxes, updateItem } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { calculateInclusiveTax } from '@/lib/tax';
 
 /**
  * Create/edit form for a menu item, including the "sold by weight" toggle added for the
@@ -33,6 +34,25 @@ export function ItemFormModal({
   const [image, setImage] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [taxes, setTaxes] = useState<TaxRate[]>([]);
+  const [taxAmount, setTaxAmount] = useState<string>(item?.tax != null ? String(item.tax) : '');
+
+  // Menu UX refinement (task #36): load the tenant's configured VAT rates so a rate can
+  // actually be assigned to an item -- previously no UI anywhere offered this, so every item
+  // created through this form silently had no tax rate set.
+  useEffect(() => {
+    let cancelled = false;
+    getTaxes()
+      .then((res) => {
+        if (!cancelled && res.status) setTaxes(res.taxes.filter((t) => t.status));
+      })
+      .catch(() => {
+        // Non-fatal: the form still works with "No tax" selected.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -51,6 +71,7 @@ export function ItemFormModal({
           category_id: categoryId === '' ? undefined : categoryId,
           sold_by_weight: soldByWeight,
           weight_unit: weightUnit,
+          tax: taxAmount || undefined,
           image,
           existingImage: item.image ?? null,
         });
@@ -64,6 +85,7 @@ export function ItemFormModal({
           category_id: categoryId === '' ? undefined : categoryId,
           sold_by_weight: soldByWeight,
           weight_unit: weightUnit,
+          tax: taxAmount || undefined,
           image,
         });
         if (!res.status) throw new Error(res.message || 'Could not create item.');
@@ -131,6 +153,27 @@ export function ItemFormModal({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500">VAT rate</label>
+            <select
+              value={taxAmount}
+              onChange={(e) => setTaxAmount(e.target.value)}
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            >
+              <option value="">No tax</option>
+              {taxes.map((t) => (
+                <option key={t.id} value={t.amount}>
+                  {t.name} ({t.amount})
+                </option>
+              ))}
+            </select>
+            {taxAmount && price.trim() && (
+              <p className="mt-1 text-xs text-neutral-400">
+                Price is VAT-inclusive: €{calculateInclusiveTax(price.trim(), taxAmount).toFixed(2)} of the price above is VAT.
+              </p>
+            )}
           </div>
 
           <div className="rounded-lg border border-neutral-200 p-3">

@@ -37,6 +37,10 @@ function createApp(knex) {
     app.use('/images', express.static(path.join(__dirname, 'tmp')));
 
     app.use("/auth", require("./routes/auth"));
+    app.use("/users", require("./routes/users"));
+    app.use("/kitchen", require("./routes/kitchen"));
+    app.use("/loyalty", require("./routes/loyalty"));
+    app.use("/sync", require("./routes/sync"));
     app.use("/tables", require("./routes/tables"));
     app.use("/menu", require("./routes/menu"));
     app.use("/items", require("./routes/items"));

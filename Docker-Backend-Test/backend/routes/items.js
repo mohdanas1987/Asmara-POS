@@ -12,6 +12,7 @@ const fs = require('fs');
 const fetchuser = require('../middlewares/loggedIn');
 const upload = require('../middlewares/multer');
 const { uploadToServer, queueProduct } = require("../utils");
+const { calculateInclusiveTax } = require('../utils/tax');
 const User = require("../models/User");
 
 let error = { status : false, message:'Something went wrong!' }
@@ -118,6 +119,13 @@ router.post('/create', [upload.single('image'), fetchuser ], async(req, res) => 
             category_id: req.body.category_id,
             sold_by_weight: req.body.sold_by_weight === true || req.body.sold_by_weight === 'true',
             weight_unit: req.body.weight_unit || 'kg',
+            // BUG FIX (Task #36 / VAT-inclusive pricing sub-task): this is the route the real
+            // frontend (src/lib/api.ts's createItem()) actually calls, but it never included
+            // `tax` in the insert payload at all -- every item created through the live UI
+            // got tax = null (its column default), so calculateInclusiveTax() always returned
+            // 0 for it downstream (POS feed, order lines, X/Z reports). /create-custom and
+            // /update both already set this field; /create was simply missing it.
+            tax: req.body.tax ?? null,
         }
 
         // DISCOVERED BUG (found while adding the weight-based-item test suite, not
@@ -155,10 +163,16 @@ router.post('/create', [upload.single('image'), fetchuser ], async(req, res) => 
             console.warn('[items/create] queueProduct is not defined in utils.js -- skipping (see routes/items.js comment)');
         }
 
+        // ADDITIVE (Task #36): expose the corrected inclusive taxAmount alongside the raw
+        // product, same shape /create-custom already returns, so the frontend can display
+        // it without recomputing the (previously buggy) formula itself. Existing `product`
+        // and `catName` fields are untouched -- Preservation Contract.
+        const productWithTax = { ...product, taxAmount: calculateInclusiveTax(product.price, product.tax) };
+
         return res.json({
             status:true,
             message:"Product added successfully!",
-            product: category? {...product, catName: category.name}: product
+            product: category? {...productWithTax, catName: category.name}: productWithTax
         });
 
     } catch (e) {
@@ -483,7 +497,13 @@ router.post(`/create-custom`, [upload.single('image'),fetchuser], async(req,res)
             price: (req.body.price).trim(),
             tax: req.body.tax ?? null,
             category_id: req.body.category_id,
-            on_web:false,
+            // BUG FIX (found via test/tax.test.js while verifying the VAT fix): this route
+            // has always inserted `on_web`, but no migration in migrations_local/ has ever
+            // added an `on_web` column to menu_items -- every call to this route crashed with
+            // "SQLITE_ERROR: table menu_items has no column named on_web". Confirmed via the
+            // frontend that this route is never actually called anywhere today (dead code),
+            // which is the only reason this pre-existing bug went unnoticed. Dropping the
+            // nonexistent field rather than adding a migration for an unused column.
             tenant_id: req.body.tenant_id,
         }
 
@@ -492,7 +512,7 @@ router.post(`/create-custom`, [upload.single('image'),fetchuser], async(req,res)
         return res.json({
             status:true,
             message:"Product has been added!",
-            product: {...product, taxAmount: product.price.replace(/\s+/g, '').trim() * parseFloat(product.tax.match(/\d+/g).join('')) / 100 }
+            product: {...product, taxAmount: calculateInclusiveTax(product.price, product.tax) }
         });
 
     } catch (error) {
