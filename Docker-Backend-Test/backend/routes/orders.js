@@ -411,6 +411,28 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
         let msg = 'Order sent to kitchen!';
         if (req.body.order_id) {
             let previousOrder = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id);
+            if (!previousOrder) {
+                return res.status(404).json({ status: false, message: 'Order not found.' });
+            }
+
+            // Optimistic locking (execution plan gap: "no conflict-safe writes on orders" --
+            // this route is the one genuine lost-update race in the app: two terminals can
+            // both read the same order's item quantities, each compute their own diff against
+            // that stale read, and whichever PATCH lands second silently discards the other
+            // terminal's edits. `expected_version` is OPTIONAL so older, not-yet-updated frontend
+            // callers keep working exactly as before (Preservation Contract); a caller that
+            // does send it gets a real conflict check instead of a silent overwrite.
+            if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
+                if (Number(req.body.expected_version) !== Number(previousOrder.version ?? 1)) {
+                    return res.status(409).json({
+                        status: false,
+                        conflict: true,
+                        message: 'This order was updated by another terminal. Refresh and try again.',
+                        order: previousOrder,
+                    });
+                }
+            }
+
             if (previousOrder.status === 'in-kitchen') { // updating the stock value of in-kitchen order;
                 msg = 'Order updated!';
                 const { quantity: oldQt } = JSON.parse(previousOrder.data ?? '{}');
@@ -430,13 +452,14 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
             } else {
                 updatedQt = { ...req.body.data.quantity };
             }
+            payload.version = Number(previousOrder.version ?? 1) + 1;
             order = await Order.query().patchAndFetchById(req.body.order_id, payload).where('tenant_id', req.body.tenant_id);
             if (order.tables) {
                 const tables = order.tables ? [order.tables] : order.tables.split('+');
                 await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tables).patch({ status: "occupied" });
             }
         } else {
-            order = await Order.query().insertAndFetch({ ...payload, note: "From direct sale.", tenant_id: req.body.tenant_id });
+            order = await Order.query().insertAndFetch({ ...payload, note: "From direct sale.", tenant_id: req.body.tenant_id, version: 1 });
         }
         let prIDs = Object.keys(updatedQt);
         const products = await Product.query().where('tenant_id', req.body.tenant_id).select(['id']).withGraphFetched('category').modifyGraph('category', (builder) => {

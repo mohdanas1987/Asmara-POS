@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { useOrders } from '@/lib/hooks/useOrders';
 import { OrderRow } from '@/lib/types';
+import { OrderPaymentsDialog } from '@/components/orders/OrderPaymentsDialog';
 
 const STATUS_BADGE: Record<string, string> = {
   ongoing: 'bg-neutral-100 text-neutral-700',
@@ -28,6 +29,7 @@ export default function OrdersPage() {
   const { orders, loading, error } = useOrders();
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | OrderRow['status']>('all');
+  const [paymentsOrderId, setPaymentsOrderId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     return orders.filter((o) => {
@@ -81,6 +83,7 @@ export default function OrdersPage() {
                 <th className="px-4 py-2">Payment</th>
                 <th className="px-4 py-2 text-right">Total</th>
                 <th className="px-4 py-2">Placed</th>
+                <th className="px-4 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -103,11 +106,20 @@ export default function OrdersPage() {
                     {o.total != null ? `€${Number(o.total).toFixed(2)}` : '—'}
                   </td>
                   <td className="px-4 py-2 text-neutral-500">{formatDate(o.created_at)}</td>
+                  <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentsOrderId(o.id)}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-brand hover:bg-brand/10"
+                    >
+                      Payments
+                    </button>
+                  </td>
                 </tr>
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-neutral-400">
+                  <td colSpan={8} className="px-4 py-12 text-center text-neutral-400">
                     No orders match.
                   </td>
                 </tr>
@@ -116,6 +128,8 @@ export default function OrdersPage() {
           </table>
         </div>
       )}
+
+      <OrderPaymentsDialog orderId={paymentsOrderId} onClose={() => setPaymentsOrderId(null)} />
     </main>
   );
 }
