@@ -137,8 +137,8 @@ export function Sidebar() {
                 href={item.href}
                 title={collapsed ? item.label : undefined}
                 className={clsx(
-                  'touch-target flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                  active ? 'bg-brand text-white' : 'text-ink-muted hover:bg-surface-sunken',
+                  'touch-target flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
+                  active ? 'bg-brand text-white shadow-sm' : 'text-ink-muted hover:bg-surface-sunken hover:translate-x-0.5',
                   collapsed && 'justify-center px-0'
                 )}
               >

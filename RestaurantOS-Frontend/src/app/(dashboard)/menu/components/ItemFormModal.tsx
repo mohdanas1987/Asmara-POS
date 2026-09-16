@@ -130,12 +130,21 @@ export function ItemFormModal({
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500">Barcode</label>
+              {/* This field doubles as the printed hardcopy-menu dish number (shown as a
+                  "#N" badge on the POS/Menu cards) as well as a barcode, if you use one --
+                  owner request: numbers here should match the physical menu exactly. */}
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500">
+                Dish # / Barcode
+              </label>
               <input
                 value={barcode}
                 onChange={(e) => setBarcode(e.target.value)}
+                placeholder="e.g. 42"
                 className="w-full rounded-lg border border-neutral-300 px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               />
+              <p className="mt-1 text-[11px] text-neutral-400">
+                Matches the number on the printed menu. Shown as a badge on the dish photo.
+              </p>
             </div>
           </div>
 

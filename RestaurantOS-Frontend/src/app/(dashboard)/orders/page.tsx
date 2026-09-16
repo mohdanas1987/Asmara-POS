@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { useOrders } from '@/lib/hooks/useOrders';
 import { OrderRow } from '@/lib/types';
 import { OrderPaymentsDialog } from '@/components/orders/OrderPaymentsDialog';
+import { parsePrice } from '@/lib/tax';
 
 const STATUS_BADGE: Record<string, string> = {
   ongoing: 'bg-neutral-100 text-neutral-700',
@@ -45,7 +46,7 @@ export default function OrdersPage() {
 
   return (
     <main className="flex h-screen flex-col p-4">
-      <h1 className="mb-4 text-xl font-semibold text-neutral-900">Orders</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold text-neutral-900">📋 Orders</h1>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input
@@ -72,7 +73,7 @@ export default function OrdersPage() {
       {error && <p className="text-red-600">{error}</p>}
 
       {!loading && !error && (
-        <div className="flex-1 overflow-auto rounded-xl border border-neutral-200 bg-white">
+        <div className="flex-1 overflow-auto rounded-2xl border border-neutral-200 bg-white shadow-sm">
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
               <tr>
@@ -88,7 +89,7 @@ export default function OrdersPage() {
             </thead>
             <tbody>
               {filtered.map((o) => (
-                <tr key={o.id} className="border-t border-neutral-100 hover:bg-neutral-50">
+                <tr key={o.id} className="border-t border-neutral-100 transition-colors hover:bg-brand/5">
                   <td className="px-4 py-2 font-mono text-xs text-neutral-500">{o.id.slice(0, 8)}</td>
                   <td className="px-4 py-2">{o.tables ?? '—'}</td>
                   <td className="px-4 py-2">{o.cashier?.name ?? '—'}</td>
@@ -102,15 +103,15 @@ export default function OrdersPage() {
                       {o.payment_status}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-right font-medium">
-                    {o.total != null ? `€${Number(o.total).toFixed(2)}` : '—'}
+                  <td className="px-4 py-2 text-right font-semibold text-neutral-900">
+                    {o.total != null ? `€${parsePrice(o.total).toFixed(2)}` : '—'}
                   </td>
                   <td className="px-4 py-2 text-neutral-500">{formatDate(o.created_at)}</td>
                   <td className="px-4 py-2 text-right">
                     <button
                       type="button"
                       onClick={() => setPaymentsOrderId(o.id)}
-                      className="rounded-lg px-2 py-1 text-xs font-medium text-brand hover:bg-brand/10"
+                      className="rounded-lg px-2.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand/10"
                     >
                       Payments
                     </button>

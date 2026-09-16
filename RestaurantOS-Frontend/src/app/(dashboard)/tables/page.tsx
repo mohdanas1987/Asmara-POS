@@ -52,6 +52,24 @@ export default function TablesPage() {
       return;
     }
 
+    // Owner-reported bug: the only way in was the small ⇄ icon, and a pointer-event
+    // propagation bug in it (fixed in TableBox.tsx) let the tap fall through to the table's
+    // own "open this order" click, dropping the person straight into the POS instead of the
+    // move flow. Fixed the icon AND added this as a proper first-class step: the toolbar's
+    // "Move table" button puts us in transfer mode with no source picked yet, and tapping an
+    // occupied table here (first tap only -- transferFrom is still null) picks it as the
+    // table being moved. Once a source is picked, taps on tables are ignored -- the
+    // destination is chosen from the free-table list at the bottom, not by tapping a table.
+    if (mode === 'transfer' && !transferFrom) {
+      if (table.status === 'free') {
+        setActionError('Pick the OCCUPIED table you want to move, not a free one.');
+        return;
+      }
+      setTransferFrom(table.table_number);
+      return;
+    }
+    if (mode === 'transfer') return; // source already picked -- destination comes from the list below
+
     // Plain tap in view mode: shift+click-equivalent long-press-free "view bill" for an
     // occupied table with a right-click-free touch UI would need a dedicated control -- for
     // now, tapping an occupied table still opens it in the POS (unchanged, high-frequency
@@ -119,13 +137,15 @@ export default function TablesPage() {
       <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-4 py-2">
         <p className="text-xs text-ink-muted">
           {mode === 'view' && 'Tap a green table to start an order · tap an amber/red table to open its current order · ⇄ to move an order.'}
-          {mode === 'transfer' && `Moving table #${transferFrom}'s order — pick a free table below.`}
+          {mode === 'transfer' && !transferFrom && 'Tap the occupied table whose order you want to move.'}
+          {mode === 'transfer' && transferFrom && `Moving table #${transferFrom}'s order — pick a free table below.`}
           {mode === 'merge' && `Selecting tables to merge (${selectedTables.length} selected) — tap tables, then Confirm.`}
           {mode === 'free-selected' && `Selecting tables to free (${selectedTables.length} selected) — tap tables, then Confirm.`}
         </p>
         <div className="flex gap-2">
           {mode === 'view' ? (
             <>
+              <Button variant="secondary" size="sm" onClick={() => setMode('transfer')}>Move table</Button>
               <Button variant="secondary" size="sm" onClick={() => setMode('merge')}>Merge tables</Button>
               <Button variant="secondary" size="sm" onClick={() => setMode('free-selected')}>Free selected</Button>
               <Button
@@ -155,8 +175,19 @@ export default function TablesPage() {
       {error && <p className="p-4 text-red-600">{error}</p>}
       {actionError && <p className="px-4 pt-2 text-sm text-red-600">{actionError}</p>}
 
+      {/* Owner feedback ("looking very basic school project"): the floor was a flat gray
+          rectangle with no sense of a real dining room. A faint dot-grid (the same visual
+          language POS floor-plan editors like the current Windows POS use for a "floor")
+          plus a touch more depth on each table (below) does most of the work without
+          touching any of the drag/selection logic. */}
       {!loading && !error && (
-        <div className="relative flex-1 overflow-auto bg-surface-sunken">
+        <div
+          className="relative flex-1 overflow-auto bg-surface-sunken"
+          style={{
+            backgroundImage: 'radial-gradient(circle, rgba(120,120,120,0.18) 1px, transparent 1px)',
+            backgroundSize: '24px 24px',
+          }}
+        >
           <div className="relative" style={{ width: 1000, height: 700 }}>
             {tables.map((t) => (
               <div key={t.id} className="group relative">
@@ -167,7 +198,7 @@ export default function TablesPage() {
                   selectionMode={selectionMode}
                   busy={busy}
                   onMove={(x, y) => moveTable(t.table_number, x, y)}
-                  onClick={() => (mode === 'transfer' ? undefined : handleTableClick(t))}
+                  onClick={() => (mode === 'transfer' && transferFrom ? undefined : handleTableClick(t))}
                   onTransferClick={
                     mode === 'view' && t.status !== 'free'
                       ? () => {

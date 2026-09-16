@@ -32,8 +32,11 @@ export function OpenRegisterModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-neutral-900">Open the register</h2>
+      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand/10 text-lg">💶</span>
+          <h2 className="text-lg font-bold text-neutral-900">Open the register</h2>
+        </div>
         <p className="mt-1 text-sm text-neutral-500">
           No active cash-register session — enter the starting cash amount to begin taking orders.
         </p>
@@ -50,7 +53,7 @@ export function OpenRegisterModal({
 
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
-        <Button type="submit" disabled={submitting} className="mt-5 w-full">
+        <Button type="submit" disabled={submitting} className="mt-5 w-full py-3 font-bold shadow-md">
           {submitting ? 'Opening…' : 'Open register & start selling'}
         </Button>
       </form>

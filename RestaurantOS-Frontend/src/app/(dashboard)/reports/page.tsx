@@ -83,8 +83,11 @@ export default function ReportsPage() {
   return (
     <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-neutral-900">Reports</h1>
-        <div className="flex gap-1 rounded-lg bg-neutral-100 p-1">
+        <h1 className="flex items-center gap-2 text-xl font-bold text-neutral-900">📊 Reports</h1>
+        {/* mr-28: the dashboard layout's global sync-status pill is fixed at top-right
+            (DashboardLayout.tsx) -- this page has no TopBar of its own to make room for it,
+            so without this margin the tab switcher sat directly underneath it. */}
+        <div className="mr-28 flex gap-1 rounded-lg bg-neutral-100 p-1">
           <button
             onClick={() => setTab('register')}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${
@@ -373,9 +376,9 @@ function SalesAndTablesTab() {
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4">
+    <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
       <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-neutral-900">{value}</p>
+      <p className="mt-1 text-2xl font-bold text-brand">{value}</p>
       {hint && <p className="mt-1 text-xs text-neutral-400">{hint}</p>}
     </div>
   );

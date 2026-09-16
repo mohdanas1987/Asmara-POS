@@ -76,7 +76,7 @@ export function TableBox({
         height: Math.max(table.width, 72),
       }}
       className={clsx(
-        'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-lg border-2 p-1 text-sm font-semibold shadow-sm',
+        'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 text-sm font-semibold shadow-md transition-shadow hover:shadow-lg',
         selectionMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
         STATUS_STYLES[table.className] ?? STATUS_STYLES.danger,
         selected && 'ring-2 ring-brand ring-offset-2',
@@ -89,9 +89,9 @@ export function TableBox({
         </span>
       )}
 
-      <span>#{table.table_number}</span>
+      <span className="text-base font-bold tracking-tight">#{table.table_number}</span>
 
-      <span className="flex items-center gap-1 text-[10px] font-normal capitalize opacity-80">
+      <span className="flex items-center gap-1 rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] font-medium capitalize opacity-90 dark:bg-white/10">
         {table.status}
         {typeof table.capacity === 'number' && (
           <span aria-label={`${table.capacity} seats`}>· 👥{table.capacity}</span>
@@ -109,7 +109,16 @@ export function TableBox({
         <button
           type="button"
           title="Move this order to another table"
+          // Owner-reported bug: tapping this icon was landing the user inside the POS
+          // product grid instead of the move flow. `onPointerDown`'s stopPropagation only
+          // blocked the table's DRAG from starting -- the browser's native pointerup event
+          // still bubbled up to the table box's own onPointerUp handler (a separate listener,
+          // not stopped by stopping pointerdown or click), which then ran its "was this a
+          // plain tap, not a drag?" check and fired the table's OWN onClick (open this
+          // table's order) right along with this button's onClick. Stopping pointerup here
+          // too closes that gap.
           onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onTransferClick();

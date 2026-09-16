@@ -5,6 +5,7 @@ import { useOrders } from '@/lib/hooks/useOrders';
 import { getSocket } from '@/lib/socket';
 import { markOrderPrepared } from '@/lib/api';
 import { OrderRow } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 
 function formatTime(iso: string) {
   try {
@@ -62,7 +63,7 @@ export default function KitchenDisplayPage() {
 
   return (
     <main className="flex h-screen flex-col p-4">
-      <h1 className="mb-1 text-xl font-semibold text-neutral-900">Kitchen Display</h1>
+      <h1 className="mb-1 flex items-center gap-2 text-xl font-bold text-neutral-900">🍳 Kitchen Display</h1>
       <p className="mb-4 text-sm text-neutral-500">Live tickets — updates instantly, no refresh needed.</p>
 
       {loading && <p className="text-neutral-400">Loading…</p>}
@@ -74,7 +75,7 @@ export default function KitchenDisplayPage() {
             <p className="col-span-full py-12 text-center text-neutral-400">No tickets in the kitchen right now.</p>
           )}
           {merged.map((o) => (
-            <div key={o.id} className="flex flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <div key={o.id} className="flex flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-md transition-shadow hover:shadow-lg">
               <div className="mb-2 flex items-center justify-between">
                 {o.source === 'online' ? (
                   <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-blue-800">
@@ -88,11 +89,11 @@ export default function KitchenDisplayPage() {
                 <span className="text-xs text-neutral-400">{formatTime(o.created_at)}</span>
               </div>
               {o.note && <p className="mb-2 text-sm text-neutral-700">{o.note}</p>}
-              <p className="mb-3 text-sm font-semibold text-neutral-900">€{Number(o.total ?? 0).toFixed(2)}</p>
+              <p className="mb-3 text-base font-bold text-neutral-900">€{parsePrice(o.total ?? 0).toFixed(2)}</p>
               <button
                 onClick={() => handlePrepared(o)}
                 disabled={busyId === o.id}
-                className="mt-auto rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+                className="mt-auto rounded-lg bg-brand px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-brand-dark disabled:opacity-50"
               >
                 {busyId === o.id ? 'Marking…' : '✓ Mark prepared'}
               </button>

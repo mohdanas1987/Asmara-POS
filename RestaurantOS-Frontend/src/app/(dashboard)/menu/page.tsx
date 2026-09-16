@@ -30,23 +30,34 @@ import { PERMISSIONS, roleHasPermission } from '@/lib/permissions';
 import { MenuItem } from '@/lib/types';
 import clsx from 'clsx';
 
+// Same fix as the POS ProductGrid: a fixed-height strip cropped most of a real dish photo
+// away under `object-cover`. NOTE: a fixed pixel height, not `aspect-[4/3]` -- inside a CSS
+// Grid cell, Chromium/WebKit fail to size an `aspect-ratio` box during the grid's row
+// track-sizing pass (measuring the ratio-derived height as 0 before the column width is
+// settled), which collapsed every card down to ~13px tall with everything invisible. A
+// definite height sidesteps that. `object-contain` (not `cover`) shows the full photo
+// instead of cropping it.
 function ItemThumb({ item }: { item: MenuItem }) {
   const [broken, setBroken] = useState(false);
-  if (!item.image || broken) {
-    return (
-      <div className="mb-2 flex h-24 w-full items-center justify-center rounded-lg bg-surface-sunken text-3xl">
-        🍽️
-      </div>
-    );
-  }
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={`/images/${item.image}`}
-      alt={item.name}
-      onError={() => setBroken(true)}
-      className="mb-2 h-24 w-full rounded-lg object-cover"
-    />
+    <div className="relative mb-2 h-32 w-full overflow-hidden rounded-lg bg-surface-sunken">
+      {item.image && !broken ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`/images/${item.image}`}
+          alt={item.name}
+          onError={() => setBroken(true)}
+          className="h-full w-full object-contain"
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-3xl">🍽️</div>
+      )}
+      {item.code && (
+        <span className="absolute right-1.5 top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-ink shadow-sm">
+          #{item.code}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -122,7 +133,9 @@ export default function MenuPage() {
     <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-ink">Menu</h1>
-        <Button onClick={() => setEditingItem('new')}>+ New item</Button>
+        {/* mr-28: clears the dashboard layout's fixed top-right sync-status pill
+            (DashboardLayout.tsx) -- this page has no TopBar of its own to make room for it. */}
+        <Button className="mr-28" onClick={() => setEditingItem('new')}>+ New item</Button>
       </div>
 
       {loading && (

@@ -59,7 +59,9 @@ export default function CustomersPage() {
     <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-neutral-900">Customers</h1>
-        <Button onClick={() => setShowForm((v) => !v)}>{showForm ? 'Cancel' : '+ New customer'}</Button>
+        {/* mr-28: clears the dashboard layout's fixed top-right sync-status pill
+            (DashboardLayout.tsx) -- this page has no TopBar of its own to make room for it. */}
+        <Button className="mr-28" onClick={() => setShowForm((v) => !v)}>{showForm ? 'Cancel' : '+ New customer'}</Button>
       </div>
 
       {loading && <p className="text-neutral-400">Loading customers…</p>}
