@@ -51,6 +51,7 @@ app.use("/auth", require("./routes/auth"));
 app.use("/users", require("./routes/users"));
 app.use("/kitchen", require("./routes/kitchen"));
 app.use("/loyalty", require("./routes/loyalty"));
+app.use("/modifiers", require("./routes/modifiers"));
 app.use("/sync", require("./routes/sync"));
 app.use("/tables", require("./routes/tables"));
 app.use("/menu", require("./routes/menu"));

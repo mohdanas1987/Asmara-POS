@@ -24,6 +24,9 @@ import { SearchInput } from '@/components/ui/SearchInput';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { ItemFormModal } from './components/ItemFormModal';
+import { ItemModifiersDialog } from './components/ItemModifiersDialog';
+import { getCurrentRole } from '@/lib/auth';
+import { PERMISSIONS, roleHasPermission } from '@/lib/permissions';
 import { MenuItem } from '@/lib/types';
 import clsx from 'clsx';
 
@@ -55,6 +58,8 @@ export default function MenuPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [localItems, setLocalItems] = useState(items);
   const [editingItem, setEditingItem] = useState<MenuItem | 'new' | null>(null);
+  const [modifiersItem, setModifiersItem] = useState<MenuItem | null>(null);
+  const canManageMenu = roleHasPermission(getCurrentRole(), PERMISSIONS.MENU_MANAGE);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<number | 'all'>('all');
 
@@ -230,12 +235,22 @@ export default function MenuPage() {
                           />
                           On POS
                         </label>
-                        <button
-                          onClick={() => setEditingItem(item)}
-                          className="text-sm text-brand hover:underline"
-                        >
-                          Edit
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {canManageMenu && (
+                            <button
+                              onClick={() => setModifiersItem(item)}
+                              className="text-sm text-ink-muted hover:underline"
+                            >
+                              Modifiers
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setEditingItem(item)}
+                            className="text-sm text-brand hover:underline"
+                          >
+                            Edit
+                          </button>
+                        </div>
                       </div>
 
                       <div className="mt-2">
@@ -261,6 +276,8 @@ export default function MenuPage() {
           </section>
         </>
       )}
+
+      <ItemModifiersDialog item={modifiersItem} onClose={() => setModifiersItem(null)} />
 
       {editingItem && (
         <ItemFormModal

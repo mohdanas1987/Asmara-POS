@@ -356,6 +356,43 @@ export async function registerTerminal(terminalId: string, name?: string) {
   });
 }
 
+// --- Menu modifiers & spice levels (routes/modifiers.js, task #40) -- menu configuration
+// only; selecting a modifier while taking an order is a separate, not-yet-built follow-up
+// (see the backend migration's comment for why). ---
+
+export async function getItemModifierGroups(menuItemId: number) {
+  return apiFetch<{ status: boolean; groups: import('./types').ModifierGroup[] }>(
+    `/modifiers/item/${menuItemId}`
+  );
+}
+
+export async function createModifierGroup(input: {
+  menu_item_id: number;
+  name: string;
+  selection_type?: 'single' | 'multiple';
+  required?: boolean;
+}) {
+  return apiFetch<{ status: boolean; message: string; group: import('./types').ModifierGroup }>(
+    '/modifiers/groups',
+    { method: 'POST', body: JSON.stringify(input) }
+  );
+}
+
+export async function deleteModifierGroup(groupId: number) {
+  return apiFetch<{ status: boolean; message: string }>(`/modifiers/groups/${groupId}`, { method: 'DELETE' });
+}
+
+export async function createModifier(groupId: number, input: { name: string; price_delta?: number }) {
+  return apiFetch<{ status: boolean; message: string; modifier: import('./types').Modifier }>(
+    `/modifiers/groups/${groupId}/modifiers`,
+    { method: 'POST', body: JSON.stringify(input) }
+  );
+}
+
+export async function deleteModifier(modifierId: number) {
+  return apiFetch<{ status: boolean; message: string }>(`/modifiers/modifiers/${modifierId}`, { method: 'DELETE' });
+}
+
 // --- Loyalty (routes/loyalty.js) -- task #48: customer QR identity + printable card ---
 
 export async function getCustomerLoyalty(customerId: number | string) {

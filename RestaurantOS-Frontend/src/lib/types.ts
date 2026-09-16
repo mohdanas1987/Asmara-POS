@@ -16,6 +16,25 @@ export interface MenuItem {
   weight_unit?: 'kg' | 'g' | 'lb';
 }
 
+// Menu modifiers & spice levels (task #40) -- see backend routes/modifiers.js.
+export interface Modifier {
+  id: number;
+  modifier_group_id: number;
+  name: string;
+  price_delta: string | number;
+}
+
+export interface ModifierGroup {
+  id: number;
+  menu_item_id: number;
+  name: string;
+  selection_type: 'single' | 'multiple';
+  required: boolean | number;
+  min_select: number;
+  max_select: number | null;
+  modifiers: Modifier[];
+}
+
 export interface MenuCategory {
   id: number;
   name: string;
