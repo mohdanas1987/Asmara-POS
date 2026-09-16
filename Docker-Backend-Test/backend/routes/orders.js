@@ -31,6 +31,20 @@ function chargesFromModes(modes) {
         .map(([method, amount]) => ({ method, amount: Number(amount) }));
 }
 
+// Bill splitting (task #49): `modes` is a { method: amount } OBJECT, so it can only ever
+// represent one charge per distinct payment method -- fine for "half cash, half card", but
+// two people who both pay by card can't both be recorded through it (the second key would
+// just overwrite the first). This is a purely ADDITIVE alternative: an optional array of
+// itemized { method, amount, note? } charges, recorded into the same ledger alongside
+// whatever chargesFromModes produces. A caller that never sends `charges` (every existing
+// frontend call today) is completely unaffected.
+function chargesFromArray(charges) {
+    if (!Array.isArray(charges)) return [];
+    return charges
+        .filter((c) => c && typeof c === 'object' && Number(c.amount) > 0 && typeof c.method === 'string' && c.method.length > 0)
+        .map((c) => ({ method: c.method, amount: Number(c.amount), note: typeof c.note === 'string' ? c.note : undefined }));
+}
+
 let error = { status: false, message: 'Something went wrong!' }
 
 router.get('/', fetchuser, async (req, res) => {
@@ -267,7 +281,11 @@ router.post('/create', fetchuser, async (req, res) => {
             throw new Error('Error creating order');
         }
 
-        const charges = chargesFromModes(modes);
+        // Bill splitting (task #49): merges any itemized req.body.charges (multiple payers,
+        // possibly the same method) in alongside the existing modes-derived charge(s). order.data
+        // above is unchanged -- it still stores just `modes`, exactly as before -- the ledger is
+        // the real source of truth and gets every individual charge.
+        const charges = [...chargesFromModes(modes), ...chargesFromArray(req.body.charges)];
         if (charges.length > 0) {
             await paymentLedger.recordCharges({
                 tenantId: req.body.tenant_id,
@@ -533,7 +551,8 @@ router.post('/payment-update', fetchuser, async (req, res) => {
             return res.json({ status: false, message: "Order not found." });
         }
 
-        const charges = chargesFromModes(modes);
+        // Bill splitting (task #49): same additive merge as /create above.
+        const charges = [...chargesFromModes(modes), ...chargesFromArray(req.body.charges)];
         if (charges.length > 0) {
             await paymentLedger.recordCharges({
                 tenantId: req.body.tenant_id,

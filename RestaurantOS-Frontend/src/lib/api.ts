@@ -129,7 +129,25 @@ export async function sendDirectSaleToKitchen(
   );
 }
 
-export async function chargeOrder(orderId: number, total: number, method: 'cash' | 'card') {
+export interface SplitCharge {
+  method: 'cash' | 'card';
+  amount: number;
+  note?: string;
+}
+
+// Bill splitting (task #49): `splitCharges`, when provided, is sent as an itemized `charges`
+// array alongside the usual merged-by-method `data` object -- purely additive on the backend
+// (routes/orders.js's chargesFromArray), so a call that omits it is byte-for-byte the same
+// request as before this task.
+export async function chargeOrder(orderId: number, total: number, method: 'cash' | 'card', splitCharges?: SplitCharge[]) {
+  const data =
+    splitCharges && splitCharges.length > 0
+      ? splitCharges.reduce<Record<string, number>>((acc, c) => {
+          acc[c.method] = (acc[c.method] || 0) + c.amount;
+          return acc;
+        }, {})
+      : { [method]: total };
+
   return apiFetch<{ status: boolean; message: string; order: import('./types').Order }>(
     '/orders/create',
     {
@@ -137,8 +155,9 @@ export async function chargeOrder(orderId: number, total: number, method: 'cash'
       body: JSON.stringify({
         order_id: orderId,
         total,
-        payment_mode: method,
-        data: { [method]: total },
+        payment_mode: splitCharges && splitCharges.length > 0 ? 'split' : method,
+        data,
+        ...(splitCharges && splitCharges.length > 0 ? { charges: splitCharges } : {}),
       }),
     }
   );

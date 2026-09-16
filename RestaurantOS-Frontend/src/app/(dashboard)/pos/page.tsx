@@ -12,6 +12,7 @@ import {
   cancelOrder,
   finishOrder,
   getOrders,
+  SplitCharge,
 } from '@/lib/api';
 import { ProductGrid } from './components/ProductGrid';
 import { Cart } from './components/Cart';
@@ -120,7 +121,15 @@ function PosPage() {
   // /orders/to-kitchen with no order_id, then /orders/create finalizes payment.
   // Table order: the order already exists (created by /orders/init when the table was
   // opened) -- charge it directly, then /orders/finish frees the table.
-  async function handleConfirmPayment(method: 'cash' | 'card') {
+  // Bill splitting (task #49): PaymentModal now confirms with either a single method or an
+  // itemized `charges` array -- everything downstream of that branch (kitchen send, finish,
+  // navigation) is completely unchanged from before this task.
+  async function handleConfirmPayment(payload: { method: 'cash' | 'card' } | { charges: SplitCharge[] }) {
+    const isSplit = 'charges' in payload;
+    const method = isSplit ? undefined : payload.method;
+    const splitCharges = isSplit ? payload.charges : undefined;
+    const summaryLabel = isSplit ? `split ${splitCharges!.length} ways` : method!;
+
     setCharging(true);
     setChargeError(null);
     try {
@@ -128,10 +137,10 @@ function PosPage() {
 
       if (isTableOrder && table && orderId) {
         await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
-        await chargeOrder(Number(orderId), cart.total, method);
+        await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges);
         await finishOrder(orderId, table);
         setShowPayment(false);
-        setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${method}) and freed.`);
+        setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
         cart.clear();
         register.refresh();
         router.push('/tables');
@@ -139,10 +148,10 @@ function PosPage() {
       }
 
       const { order } = await sendDirectSaleToKitchen(quantities, cart.total, weights);
-      await chargeOrder(order.id, cart.total, method);
+      await chargeOrder(order.id, cart.total, method ?? 'card', splitCharges);
 
       setShowPayment(false);
-      setLastResult(`Order #${order.id} charged €${cart.total.toFixed(2)} (${method}).`);
+      setLastResult(`Order #${order.id} charged €${cart.total.toFixed(2)} (${summaryLabel}).`);
       cart.clear();
       register.refresh();
     } catch (err) {

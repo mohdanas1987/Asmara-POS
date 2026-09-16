@@ -26,6 +26,11 @@ async function recordCharges({ tenantId, orderId, payments, createdBy }) {
       amount: Number(p.amount).toFixed(2),
       status: 'succeeded',
       provider_reference: p.provider_reference ?? null,
+      // Bill splitting (task #49): lets a per-charge note (e.g. "Seat 2", "Alex's half")
+      // survive into the ledger -- previously accepted on the row shape but never mapped
+      // here, so it was always silently dropped even though the column has existed since
+      // this table was created.
+      note: p.note ?? null,
       created_by: createdBy ?? null,
     }));
   if (rows.length === 0) return [];
