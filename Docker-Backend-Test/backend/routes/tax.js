@@ -85,8 +85,16 @@ router.get('/remove/:id', fetchuser, async(req, res) =>{
 // whole POS with a bare GET. PATCH alias added; original GET kept working for the frontend.
 async function toggleTaxHandler(req, res) {
     try {
+        // BUG FIX (found 2026-09-16 while building the Tax Rates settings screen, the first
+        // real caller of this endpoint besides a bare curl test): req.params.status is a
+        // STRING straight off the URL ("true"/"false") and was being patched into the
+        // `status` boolean column as-is. SQLite has no real boolean type, so the literal
+        // text "false" got stored -- and a non-empty JS string is truthy, so every "disable"
+        // silently did nothing (the row came back looking enabled everywhere it's read).
+        // Coercing to an actual boolean before the patch is the fix.
+        const statusBool = req.params.status === 'true' || req.params.status === '1';
         const tax = await Tax.query().patchAndFetchById(req.params.id, {
-            status: req.params.status
+            status: statusBool
         }).where('tenant_id', req.body.tenant_id);
         return res.json({status:true, tax, message: "Status updated!" });
     } catch (error) {

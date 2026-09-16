@@ -352,6 +352,37 @@ export async function getTaxes() {
   return apiFetch<{ status: boolean; taxes: import('./types').TaxRate[] }>('/tax');
 }
 
+// GET /tax only returns ACTIVE rates (it's the dropdown-population endpoint used when
+// assigning a rate to a menu item) -- a management screen needs to see disabled rates too
+// so they can be re-enabled, hence /tax/list instead.
+export async function getAllTaxes() {
+  return apiFetch<{ status: boolean; taxes: import('./types').TaxRate[] }>('/tax/list');
+}
+
+export async function createTax(input: { name: string; amount: string; status?: boolean }) {
+  return apiFetch<{ status: boolean; tax: import('./types').TaxRate }>('/tax/create', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTax(input: { id: number; name: string; amount: string; status: boolean }) {
+  return apiFetch<{ status: boolean; tax: import('./types').TaxRate }>('/tax/update', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteTax(id: number) {
+  return apiFetch<{ status: boolean }>(`/tax/remove/${id}`);
+}
+
+export async function toggleTax(id: number, status: boolean) {
+  return apiFetch<{ status: boolean; tax: import('./types').TaxRate }>(`/tax/toggle/${id}/${status}`, {
+    method: 'PATCH',
+  });
+}
+
 // --- Customers (routes/pos.js) ---
 
 export async function getCustomers() {

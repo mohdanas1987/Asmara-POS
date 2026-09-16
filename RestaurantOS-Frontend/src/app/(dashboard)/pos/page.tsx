@@ -20,6 +20,8 @@ import { PaymentModal } from './components/PaymentModal';
 import { OpenRegisterModal } from './components/OpenRegisterModal';
 import { WeighItemModal } from './components/WeighItemModal';
 import { MenuItem } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
+import { publishCustomerDisplay } from '@/lib/customerDisplay';
 
 export default function PosPageWrapper() {
   // useSearchParams needs a Suspense boundary for the static parts of this route to still
@@ -73,6 +75,37 @@ function PosPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTableOrder, loading, items, preloaded, table]);
+
+  // Customer-facing display (second monitor, opened by the desktop shell): mirrors the
+  // current order live so a customer can follow along as items are rung up, the same way
+  // a real POS terminal's customer-facing screen works. Publishes null (welcome screen)
+  // once the cart is empty -- covers "nothing rung up yet" and "just charged and cleared"
+  // with the same state, which is the right customer-facing behavior for both.
+  useEffect(() => {
+    if (cart.lines.length === 0) {
+      publishCustomerDisplay(null);
+      return;
+    }
+    publishCustomerDisplay({
+      tableNumber: table,
+      lines: cart.lines.map((l) => ({
+        name: l.item.name,
+        qty: l.qty,
+        weight: l.weight,
+        weightUnit: l.item.weight_unit,
+        linePrice: parsePrice(l.item.price) * (l.weight ?? l.qty),
+      })),
+      subtotal: cart.subtotal,
+      tax: cart.tax,
+      total: cart.total,
+    });
+  }, [cart.lines, cart.subtotal, cart.tax, cart.total, table]);
+
+  // Clear the customer display when leaving the POS screen entirely (e.g. back to Tables)
+  // so it doesn't keep showing a stale order to whoever's standing at the counter.
+  useEffect(() => {
+    return () => publishCustomerDisplay(null);
+  }, []);
 
   function buildQuantities() {
     const quantities: Record<number, number> = {};

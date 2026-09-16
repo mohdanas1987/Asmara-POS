@@ -58,6 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: '/settings/website', label: 'Website Sync', icon: '🔗', permission: PERMISSIONS.SETTINGS_MANAGE },
       { href: '/settings/payments', label: 'Payments', icon: '💳', permission: PERMISSIONS.SETTINGS_MANAGE },
+      { href: '/settings/tax', label: 'Tax Rates', icon: '🧮', permission: PERMISSIONS.SETTINGS_MANAGE },
     ],
   },
 ];
