@@ -462,6 +462,28 @@ export async function removeReport(id: number) {
   return apiFetch<{ status: boolean; message: string }>(`/orders/remove-report/${id}`, { method: 'DELETE' });
 }
 
+// --- Sales & table-performance reports (routes/reports.js, task #38) ---
+
+export async function getSalesReport(range?: { from?: string; to?: string }) {
+  const params = new URLSearchParams();
+  if (range?.from) params.set('from', range.from);
+  if (range?.to) params.set('to', range.to);
+  const qs = params.toString();
+  return apiFetch<{ status: boolean; message?: string } & import('./types').SalesReportData>(
+    `/reports/sales${qs ? `?${qs}` : ''}`
+  );
+}
+
+export async function getTablePerformanceReport(range?: { from?: string; to?: string }) {
+  const params = new URLSearchParams();
+  if (range?.from) params.set('from', range.from);
+  if (range?.to) params.set('to', range.to);
+  const qs = params.toString();
+  return apiFetch<{ status: boolean; message?: string } & import('./types').TablePerformanceData>(
+    `/reports/table-performance${qs ? `?${qs}` : ''}`
+  );
+}
+
 // --- Kitchen display (routes/orders.js) ---
 
 export async function finishOrder(orderId: string, tables: string) {

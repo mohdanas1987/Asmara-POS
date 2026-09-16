@@ -170,6 +170,31 @@ export interface ReportRow {
   created_at: string;
 }
 
+export interface SalesReportData {
+  range: { from: string; to: string };
+  totals: { revenue: number; orders: number; avgOrderValue: number; partialOrders: number };
+  byDay: { date: string; revenue: number; orders: number }[];
+  byCategory: { category: string; revenue: number }[];
+  byPaymentMethod: { cash: number; card: number; account: number };
+  topItems: { id: string; name: string; quantity: number; revenue: number }[];
+}
+
+export interface TablePerformanceRow {
+  table: string;
+  capacity: number | null;
+  section: string | null;
+  orders: number;
+  revenue: number;
+  avgOrderValue: number;
+  avgTurnoverMinutes: number | null;
+  lastUsed: string | null;
+}
+
+export interface TablePerformanceData {
+  range: { from: string; to: string };
+  tables: TablePerformanceRow[];
+}
+
 export interface WebsiteStatus {
   connected: boolean;
   website_url: string | null;

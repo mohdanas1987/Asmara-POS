@@ -46,6 +46,7 @@ function createApp(knex) {
     app.use("/menu", require("./routes/menu"));
     app.use("/items", require("./routes/items"));
     app.use("/orders", require("./routes/orders"));
+    app.use("/reports", require("./routes/reports"));
     app.use("/pos", require("./routes/pos"));
     app.use("/tax", require("./routes/tax"));
     app.use("/config", require("./routes/config"));
