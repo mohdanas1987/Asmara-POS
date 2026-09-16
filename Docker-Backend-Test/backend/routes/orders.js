@@ -828,7 +828,11 @@ router.get('/day-close/:id', fetchuser, async (req, res) => {
             register_id: req.params.id,
             type: 'Z',
             myID: req.body.myID,
-            currency: '€ '
+            currency: '€ ',
+            // Data-integrity fix (project audit 2026-09-16): this call was the one route in
+            // the app that forgot to pass tenant_id into generateReport at all -- see utils.js's
+            // generateReport for the full writeup of what that call needing it actually fixes.
+            tenant_id: req.body.tenant_id,
         });
         await CashRegister.query()
             .where('id', req.params.id)

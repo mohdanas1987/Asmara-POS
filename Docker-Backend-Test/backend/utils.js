@@ -226,6 +226,16 @@ const generateReport = async (payload) => {
     let b64 = fs.readFileSync(imgPath, 'base64');
 
     const { type: Rtype, register_id, currency } = payload;
+    // Data-integrity fix (project audit 2026-09-16): every query and mutation below was
+    // completely UNSCOPED by tenant -- an X/Z report for tenant A read tenant B's orders and
+    // cash register too, and (far worse) the Z-report close-out below deleted every tenant's
+    // pending orders and freed every tenant's tables in one call, not just the reporting
+    // tenant's. Harmless today only because this deployment has a single tenant (id 1, the
+    // default every tenant-scoped column falls back to per migration 0003) -- it would
+    // silently corrupt another restaurant's live data the moment a second tenant ever shares
+    // this database. Every restaurant-scoped table has carried a tenant_id column since that
+    // migration specifically so routes could do this; this function just never did.
+    const tenantId = payload.tenant_id ?? 1;
 
     let totals = {
         totalProducts: 0,
@@ -245,10 +255,10 @@ const generateReport = async (payload) => {
     const qt = {};
     let lastRegisterID = null;
 
-    let ordersQuery = Order.query().select(['data', 'payment_mode']).where('payment_status', 'paid');
+    let ordersQuery = Order.query().select(['data', 'payment_mode']).where('tenant_id', tenantId).where('payment_status', 'paid');
     if (payload.today) {
 
-        const lastSession = await CashRegister.query().where('status', true).select('id').first().orderBy('id', 'DESC');
+        const lastSession = await CashRegister.query().where('tenant_id', tenantId).where('status', true).select('id').first().orderBy('id', 'DESC');
         if (lastSession) {
             lastRegisterID = lastSession.id
             ordersQuery
@@ -383,7 +393,7 @@ const generateReport = async (payload) => {
     }
 
     let me = await User.query().where('id', payload.myID).first();
-    let registerCash = await CashRegister.query().where('id', payload.register_id ?? lastRegisterID).first();
+    let registerCash = await CashRegister.query().where('tenant_id', tenantId).where('id', payload.register_id ?? lastRegisterID).first();
 
     // now we have the meta-data
     let data = {
@@ -424,8 +434,17 @@ const generateReport = async (payload) => {
     if (Rtype === 'Z') {
         if (payload.today) { // more likely the current session
 
-            await Order.query().where('cash_register_id', lastRegisterID).where('data', null).orWhere('payment_status', 'pending').delete();
-            await Table.query().patch({
+            // Was `.where(A).where(B).orWhere(C)`, which knex compiles as `(A AND B) OR C` --
+            // the "OR pending" half applied with NO cash_register_id or tenant filter at all,
+            // so closing tenant A's day deleted every tenant's pending orders. Grouped into a
+            // sub-where so both real conditions (dataless OR pending) stay scoped to this
+            // tenant's this specific register.
+            await Order.query()
+                .where('tenant_id', tenantId)
+                .where('cash_register_id', lastRegisterID)
+                .where((builder) => builder.whereNull('data').orWhere('payment_status', 'pending'))
+                .delete();
+            await Table.query().where('tenant_id', tenantId).patch({
                 status: 'free',
                 linked_to: null
             });
@@ -434,18 +453,20 @@ const generateReport = async (payload) => {
                 path: pathName,
                 date: europeanDate(),
                 user_id: payload.myID,
+                tenant_id: tenantId,
                 cash_register_id: lastRegisterID ?? 0,
                 html: toSave.replace('display:grid;', 'display:flex')
             });
 
         } else {
 
-            const exists = await Report.query().where('cash_register_id', lastRegisterID).first();
+            const exists = await Report.query().where('tenant_id', tenantId).where('cash_register_id', lastRegisterID).first();
             if (!exists && lastRegisterID) {
                 await Report.query().insert({
                     path: pathName,
                     date: europeanDate(),
                     user_id: payload.myID,
+                    tenant_id: tenantId,
                     cash_register_id: lastRegisterID ?? 0,
                     // html: view
                     html: toSave.replace('display:grid;', 'display:flex')
@@ -483,20 +504,29 @@ const generateReport = async (payload) => {
 
 }
 
-const generateZreport = async (cron = false) => {
-    const lastSession = await CashRegister.query().where('status', true).select('id').first().orderBy('id', 'DESC');
+// Scheduled/cron auto-close (utils/jobs/scheduler.js, runs every minute with no per-request
+// tenant context at all). NOT yet multi-tenant aware -- it always operates on tenant 1, same
+// as this whole codebase's single-tenant-today default (migration 0003). Making the scheduler
+// itself iterate every tenant is a separate, larger change (it would need to look up each
+// tenant's own due job independently); tracked as a known limitation here rather than
+// silently pretending this call site is fixed too. The interactive path used by an actual
+// logged-in user pressing "Z-report" (routes/orders.js, which always has a real tenant_id
+// from the caller's JWT) is the one that mattered most and is now fully tenant-scoped above.
+const generateZreport = async (cron = false, tenantId = 1) => {
+    const lastSession = await CashRegister.query().where('tenant_id', tenantId).where('status', true).select('id').first().orderBy('id', 'DESC');
     if (lastSession) {
         await generateReport({
             today: true,
             type: 'Z',
             currency: '€ ',
-            register_id: null
+            register_id: null,
+            tenant_id: tenantId,
         });
         if (cron) {
-            await CashRegister.query().where('id', lastSession.id).patch({
+            await CashRegister.query().where('tenant_id', tenantId).where('id', lastSession.id).patch({
                 status: false
             });
-            await Table.query().patch({
+            await Table.query().where('tenant_id', tenantId).patch({
                 status: "free"
             });
         }
