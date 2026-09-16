@@ -46,7 +46,7 @@ export function BillPreviewDialog({
         </ul>
         <div className="mt-3 flex items-center justify-between border-t border-border pt-3 text-base font-semibold text-ink">
           <span>Total</span>
-          <span>€{order?.total != null ? Number(order.total).toFixed(2) : '0.00'}</span>
+          <span>€{order?.total != null ? parsePrice(order.total).toFixed(2) : '0.00'}</span>
         </div>
       </div>
       <div className="mt-5 flex justify-end gap-2">

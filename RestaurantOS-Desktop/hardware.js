@@ -58,7 +58,59 @@ async function listPrinters() {
     return found;
 }
 
-async function print({ printerId, type, address, escposCommands }) {
+// BUG FIX (found 2026-09-16 while wiring real receipt/kitchen-ticket printing into the
+// POS): this used to take `escposCommands` as a raw JS FUNCTION, built by the caller and
+// invoked here against the live `printer` object. That only ever worked for callers already
+// running in the Electron MAIN process (like openCashDrawer below, which calls print()
+// directly). It could never work from the actual POS screen, because that runs in the
+// renderer and reaches this file over `ipcRenderer.invoke('hardware:print', payload)` --
+// Electron IPC uses the structured clone algorithm, which cannot carry a function across
+// the boundary at all. So every real call site was doomed before it started; there simply
+// wasn't a way to print a real ticket from the app. Replaced `escposCommands` with `ticket`:
+// a plain, JSON-serializable array of print instructions the renderer can safely send, which
+// this file turns into the actual escpos.Printer calls.
+//
+// Supported instructions (each `{ op, ...params }`):
+//   { op: 'align', value: 'lt' | 'ct' | 'rt' }
+//   { op: 'style', bold?: boolean, size?: [w, h] }   -- size 1-8 per escpos's setTextSize
+//   { op: 'text', value: string }
+//   { op: 'feed', lines?: number }                    -- default 1
+//   { op: 'rule' }                                     -- a full-width dashed divider line
+//   { op: 'qrcode', value: string }
+//   { op: 'cashdraw' }
+function runTicket(printer, ticket) {
+    const RULE = '-'.repeat(32); // 32 chars is the safe default width for 58mm thermal paper
+    for (const instr of ticket) {
+        switch (instr.op) {
+            case 'align':
+                printer.align(instr.value);
+                break;
+            case 'style':
+                if (instr.bold !== undefined) printer.style(instr.bold ? 'B' : 'NORMAL');
+                if (instr.size) printer.size(instr.size[0], instr.size[1]);
+                break;
+            case 'text':
+                printer.text(instr.value);
+                break;
+            case 'feed':
+                printer.feed(instr.lines ?? 1);
+                break;
+            case 'rule':
+                printer.text(RULE);
+                break;
+            case 'qrcode':
+                printer.qrimage ? printer.qrimage(instr.value, () => {}) : printer.text(instr.value);
+                break;
+            case 'cashdraw':
+                printer.cashdraw(2);
+                break;
+            default:
+                console.warn('[hardware] unknown ticket instruction, skipping:', instr.op);
+        }
+    }
+}
+
+async function print({ printerId, type, address, ticket }) {
     if (!escpos) {
         throw new Error('escpos is not installed on this machine. Install it (and the matching escpos-usb/escpos-network/escpos-bluetooth adapter) to enable printing.');
     }
@@ -78,7 +130,7 @@ async function print({ printerId, type, address, escposCommands }) {
     return new Promise((resolve, reject) => {
         device.open((err) => {
             if (err) return reject(err);
-            escposCommands(printer); // caller builds the actual ticket layout
+            runTicket(printer, ticket ?? []);
             printer.cut().close(resolve);
         });
     });
@@ -90,7 +142,7 @@ async function openCashDrawer(printerId) {
     return print({
         printerId,
         type: 'usb',
-        escposCommands: (printer) => printer.cashdraw(2),
+        ticket: [{ op: 'cashdraw' }],
     });
 }
 

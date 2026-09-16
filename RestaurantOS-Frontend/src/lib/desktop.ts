@@ -9,6 +9,26 @@ export interface PrinterInfo {
   label: string;
 }
 
+// Mirrors hardware.js's `runTicket()` on the Electron main-process side. A plain,
+// JSON-serializable instruction list -- Electron IPC (structured clone) cannot carry a
+// function across the renderer/main boundary, so the actual ticket LAYOUT has to be data,
+// not code, built here and interpreted there.
+export type PrintInstruction =
+  | { op: 'align'; value: 'lt' | 'ct' | 'rt' }
+  | { op: 'style'; bold?: boolean; size?: [number, number] }
+  | { op: 'text'; value: string }
+  | { op: 'feed'; lines?: number }
+  | { op: 'rule' }
+  | { op: 'qrcode'; value: string }
+  | { op: 'cashdraw' };
+
+export interface PrintJob {
+  printerId: string;
+  type: 'usb' | 'network' | 'bluetooth';
+  address?: string;
+  ticket: PrintInstruction[];
+}
+
 export interface SerialPortInfo {
   id: string;
   path?: string;
@@ -51,7 +71,7 @@ export interface NetworkScaleCandidate {
 
 interface RestaurantOSBridge {
   listPrinters: () => Promise<PrinterInfo[]>;
-  print: (payload: unknown) => Promise<void>;
+  print: (payload: PrintJob) => Promise<void>;
   openCashDrawer: (printerId: string) => Promise<void>;
   listPaymentTerminals: () => Promise<unknown[]>;
   getConfig: (key: string) => Promise<unknown>;

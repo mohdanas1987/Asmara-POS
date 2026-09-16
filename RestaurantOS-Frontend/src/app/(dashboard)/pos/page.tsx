@@ -22,6 +22,7 @@ import { WeighItemModal } from './components/WeighItemModal';
 import { MenuItem } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
 import { publishCustomerDisplay } from '@/lib/customerDisplay';
+import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
 
 export default function PosPageWrapper() {
   // useSearchParams needs a Suspense boundary for the static parts of this route to still
@@ -131,6 +132,9 @@ function PosPage() {
       const { quantities } = buildQuantities();
       await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
       setLastResult(`Sent to kitchen for table #${table}.`);
+      // Best-effort -- a failed/missing printer must never block an order that already
+      // reached the kitchen display digitally (see lib/printing.ts's fallback behavior).
+      printKitchenTicket({ tableNumber: table, orderId, lines: cartLinesToTicketLines(cart.lines) });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not send to kitchen.');
     } finally {
@@ -168,12 +172,24 @@ function PosPage() {
     try {
       const { quantities, weights } = buildQuantities();
 
+      const receiptLines = cartLinesToTicketLines(cart.lines);
+      const paymentMethodLabel = isSplit ? 'split payment' : method!;
+
       if (isTableOrder && table && orderId) {
         await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
         await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges);
         await finishOrder(orderId, table);
         setShowPayment(false);
         setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
+        printReceipt({
+          tableNumber: table,
+          orderId,
+          lines: receiptLines,
+          subtotal: cart.subtotal,
+          tax: cart.tax,
+          total: cart.total,
+          paymentMethod: paymentMethodLabel,
+        });
         cart.clear();
         register.refresh();
         router.push('/tables');
@@ -185,6 +201,14 @@ function PosPage() {
 
       setShowPayment(false);
       setLastResult(`Order #${order.id} charged €${cart.total.toFixed(2)} (${summaryLabel}).`);
+      printReceipt({
+        orderId: order.id,
+        lines: receiptLines,
+        subtotal: cart.subtotal,
+        tax: cart.tax,
+        total: cart.total,
+        paymentMethod: paymentMethodLabel,
+      });
       cart.clear();
       register.refresh();
     } catch (err) {
