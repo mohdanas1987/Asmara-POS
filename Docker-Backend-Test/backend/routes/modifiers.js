@@ -113,7 +113,15 @@ router.patch('/groups/:id', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE
 router.delete('/groups/:id', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), async (req, res) => {
     try {
         await assertOwnsGroup(req.body.tenant_id, req.params.id);
-        await ModifierGroup.query().deleteById(req.params.id); // cascades to its modifiers
+        // Found via a real failing test, not assumed: the migration's ON DELETE CASCADE only
+        // actually fires on engines that enforce foreign keys by default (MySQL, production).
+        // SQLite (every local/test run) ignores FK constraints entirely unless a per-connection
+        // PRAGMA is turned on, which nothing in this app's knex setup does -- so relying on the
+        // database to cascade left orphaned modifier rows behind in dev/test. Deleting the
+        // modifiers explicitly first makes this correct on every engine, not just the one this
+        // migration happened to be written against.
+        await Modifier.query().where('modifier_group_id', req.params.id).delete();
+        await ModifierGroup.query().deleteById(req.params.id);
         return res.json({ status: true, message: 'Modifier group deleted.' });
     } catch (e) {
         return res.status(e.statusCode || 500).json({ status: false, message: e.message });

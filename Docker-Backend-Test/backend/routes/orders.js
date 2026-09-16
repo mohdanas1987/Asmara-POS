@@ -34,10 +34,12 @@ function chargesFromModes(modes) {
 // Bill splitting (task #49): `modes` is a { method: amount } OBJECT, so it can only ever
 // represent one charge per distinct payment method -- fine for "half cash, half card", but
 // two people who both pay by card can't both be recorded through it (the second key would
-// just overwrite the first). This is a purely ADDITIVE alternative: an optional array of
-// itemized { method, amount, note? } charges, recorded into the same ledger alongside
-// whatever chargesFromModes produces. A caller that never sends `charges` (every existing
-// frontend call today) is completely unaffected.
+// just overwrite the first). This is an optional alternative shape: an array of itemized
+// { method, amount, note? } charges. It is NOT summed together with chargesFromModes's output
+// -- both describe the same underlying payment, just shaped differently, so whichever call
+// site uses this picks one or the other (see the precedence comment at each call site) to
+// avoid double-recording a single payment. A caller that never sends `charges` (every
+// existing frontend call today) is completely unaffected.
 function chargesFromArray(charges) {
     if (!Array.isArray(charges)) return [];
     return charges
@@ -281,11 +283,16 @@ router.post('/create', fetchuser, async (req, res) => {
             throw new Error('Error creating order');
         }
 
-        // Bill splitting (task #49): merges any itemized req.body.charges (multiple payers,
-        // possibly the same method) in alongside the existing modes-derived charge(s). order.data
-        // above is unchanged -- it still stores just `modes`, exactly as before -- the ledger is
-        // the real source of truth and gets every individual charge.
-        const charges = [...chargesFromModes(modes), ...chargesFromArray(req.body.charges)];
+        // Bill splitting (task #49): `data`/`modes` and an itemized `charges` array both
+        // describe the SAME payment, just shaped differently (modes is a merged-by-method
+        // summary; charges is the itemized per-payer breakdown) -- they must never both be
+        // recorded, or a split payment gets double-counted in the ledger. Found and fixed
+        // before this ever shipped to a real check-out: an earlier version of this line
+        // concatenated both sources, which recorded (and summed) every split charge TWICE.
+        // When charges is provided, it's the sole source of truth; order.data above still
+        // stores just `modes` either way, for backward-compatible display only.
+        const arrayCharges = chargesFromArray(req.body.charges);
+        const charges = arrayCharges.length > 0 ? arrayCharges : chargesFromModes(modes);
         if (charges.length > 0) {
             await paymentLedger.recordCharges({
                 tenantId: req.body.tenant_id,
@@ -551,8 +558,11 @@ router.post('/payment-update', fetchuser, async (req, res) => {
             return res.json({ status: false, message: "Order not found." });
         }
 
-        // Bill splitting (task #49): same additive merge as /create above.
-        const charges = [...chargesFromModes(modes), ...chargesFromArray(req.body.charges)];
+        // Bill splitting (task #49): same precedence rule as /create above -- an itemized
+        // `charges` array, when present, is the sole source of truth (never summed together
+        // with the modes-derived charge, which would double-count the same payment).
+        const arrayCharges = chargesFromArray(req.body.charges);
+        const charges = arrayCharges.length > 0 ? arrayCharges : chargesFromModes(modes);
         if (charges.length > 0) {
             await paymentLedger.recordCharges({
                 tenantId: req.body.tenant_id,

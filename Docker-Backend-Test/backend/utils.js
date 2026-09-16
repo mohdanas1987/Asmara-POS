@@ -475,13 +475,30 @@ const generateReport = async (payload) => {
 
         }
 
-        pdf.create(view.replace('display:grid;', 'display:flex').replace('width:32vw','width:80mm'), options).toBuffer(async (err, fileBuffer) => {
-            if (err) {
-                console.error(err);
-            } else {
-                await storage.put(pathName, fileBuffer);
-            }
-        });
+        // Resilience fix (found while adding the first-ever automated test for this route):
+        // the register close-out, order cleanup, and table-free logic above this point have
+        // ALL already succeeded by the time we get here -- this is purely archiving a PDF
+        // snapshot of the report, a nice-to-have, not the operationally critical part of
+        // closing the day. html-pdf's `pdf.create()` can throw SYNCHRONOUSLY (not just via its
+        // own error callback below) when it can't resolve a PhantomJS binary at all -- e.g.
+        // phantomjs-prebuilt failing to install, which is common on Apple Silicon since that
+        // package is effectively unmaintained. Before this fix, that synchronous throw
+        // propagated all the way up and made the WHOLE Z-report request fail with
+        // status:false, silently skipping the outer route's register-close/table-free calls
+        // too (routes/orders.js's /z-report) -- meaning a broken PDF renderer could block a
+        // restaurant from closing their day at all. Now it's logged and skipped, matching the
+        // handling this code already gives an async rendering failure just below.
+        try {
+            pdf.create(view.replace('display:grid;', 'display:flex').replace('width:32vw','width:80mm'), options).toBuffer(async (err, fileBuffer) => {
+                if (err) {
+                    console.error(err);
+                } else {
+                    await storage.put(pathName, fileBuffer);
+                }
+            });
+        } catch (pdfError) {
+            console.error('[reports] non-fatal: could not render/store the PDF snapshot:', pdfError.message);
+        }
 
     } else {
         // for Testing purpose

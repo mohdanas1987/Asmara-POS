@@ -136,9 +136,10 @@ export interface SplitCharge {
 }
 
 // Bill splitting (task #49): `splitCharges`, when provided, is sent as an itemized `charges`
-// array alongside the usual merged-by-method `data` object -- purely additive on the backend
-// (routes/orders.js's chargesFromArray), so a call that omits it is byte-for-byte the same
-// request as before this task.
+// array; the backend treats that array as the sole source of truth for what gets recorded
+// (routes/orders.js) rather than summing it with the merged-by-method `data` object also sent
+// alongside it (data is kept only for backward-compatible display). A call that omits
+// splitCharges is byte-for-byte the same request as before this task.
 export async function chargeOrder(orderId: number, total: number, method: 'cash' | 'card', splitCharges?: SplitCharge[]) {
   const data =
     splitCharges && splitCharges.length > 0

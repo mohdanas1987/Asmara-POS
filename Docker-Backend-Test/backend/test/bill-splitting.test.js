@@ -3,10 +3,13 @@
  * Bill splitting (task #49). The `modes` object accepted by POST /orders/create and
  * /orders/payment-update can only ever represent one charge per distinct payment METHOD
  * (it's a { method: amount } object) -- two people who both pay by card can't both be
- * recorded through it. This adds a purely additive `charges` array alongside it: itemized
- * { method, amount, note? } rows, merged into the same ledger. A caller that never sends
- * `charges` (every existing frontend call before this task, and the existing payments-ledger
- * suite) is completely unaffected -- covered by the first test below.
+ * recorded through it. This adds an optional itemized `charges` array alongside it: when
+ * present, it is the SOLE source of truth for what gets recorded (never summed together with
+ * the modes-derived charge -- an earlier version of this feature did exactly that and
+ * silently double-recorded every split payment, caught by the second test below before it
+ * ever shipped). A caller that never sends `charges` (every existing frontend call before
+ * this task, and the existing payments-ledger suite) is completely unaffected -- covered by
+ * the first test below.
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

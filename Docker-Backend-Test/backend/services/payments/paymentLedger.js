@@ -34,7 +34,20 @@ async function recordCharges({ tenantId, orderId, payments, createdBy }) {
       created_by: createdBy ?? null,
     }));
   if (rows.length === 0) return [];
-  return PaymentTransaction.query().insert(rows);
+  // Bill splitting (task #49) is the first caller to ever pass more than one row here at
+  // once (an existing single-order-multiple-payment-method call already could, in theory,
+  // but no prior test ever exercised it either). Objection.js's `.insert()` only supports a
+  // multi-row array on Postgres/SQL Server -- on SQLite (tests/dev) and MySQL (production)
+  // it throws "batch insert only works with Postgresql and SQL Server". Discovered via a real
+  // failing test, not guessed at. Inserting one row at a time works identically everywhere,
+  // and sequentially (not Promise.all) so insertion order -- and therefore each row's
+  // strictly-increasing id -- matches the order the charges were given in, the same
+  // insertion-order guarantee getLedger()'s ordering already relies on elsewhere.
+  const inserted = [];
+  for (const row of rows) {
+    inserted.push(await PaymentTransaction.query().insert(row));
+  }
+  return inserted;
 }
 
 /**
