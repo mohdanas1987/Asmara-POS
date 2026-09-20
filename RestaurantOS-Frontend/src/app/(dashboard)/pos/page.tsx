@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMenu } from '@/lib/hooks/useMenu';
 import { useCart } from '@/lib/hooks/useCart';
@@ -12,6 +12,8 @@ import {
   cancelOrder,
   finishOrder,
   getOrders,
+  getItemModifierGroups,
+  OrderLineDetail,
   SplitCharge,
 } from '@/lib/api';
 import { ProductGrid } from './components/ProductGrid';
@@ -19,7 +21,8 @@ import { Cart } from './components/Cart';
 import { PaymentModal } from './components/PaymentModal';
 import { OpenRegisterModal } from './components/OpenRegisterModal';
 import { WeighItemModal } from './components/WeighItemModal';
-import { MenuItem } from '@/lib/types';
+import { ItemModifierPicker } from './components/ItemModifierPicker';
+import { MenuItem, ModifierGroup, SelectedModifier } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
 import { publishCustomerDisplay } from '@/lib/customerDisplay';
 import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
@@ -50,6 +53,14 @@ function PosPage() {
   const [chargeError, setChargeError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [weighingItem, setWeighingItem] = useState<MenuItem | null>(null);
+  // Modifiers (CTO forensic audit 2026-09-20, "Gate 1: Order domain completion"): a menu
+  // item with configured modifier groups (routes/modifiers.js) opens a picker before it's
+  // added to the cart, same interception shape as the existing sold_by_weight -> WeighItemModal
+  // flow above. Most items have zero groups, so results are cached per item id (in a ref, not
+  // state -- this is a pure perf cache, re-rendering on it would be pointless) to avoid
+  // re-fetching on every single tap of the same product.
+  const [modifierPickerItem, setModifierPickerItem] = useState<MenuItem | null>(null);
+  const modifierGroupsCache = useRef<Map<number, ModifierGroup[]>>(new Map());
   const [sendingToKitchen, setSendingToKitchen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [preloaded, setPreloaded] = useState(false);
@@ -65,7 +76,25 @@ function PosPage() {
       .then((res) => {
         if (cancelled || !table) return;
         const existing = res.tableOrders?.[table];
-        cart.loadFromQuantities(existing?.data?.quantity, items);
+        const savedLines = (existing?.data as { lines?: OrderLineDetail[] } | undefined)?.lines;
+        if (savedLines && savedLines.length > 0) {
+          // `data.lines` only ever contains the modifier-bearing lines (see buildLineDetail
+          // above) -- reconstruct the rest of the cart from the flat quantity map, then layer
+          // the richer lines on top by subtracting their quantities out of that map first so
+          // nothing gets double-counted.
+          const quantities = { ...(existing?.data?.quantity || {}) };
+          savedLines.forEach((l) => {
+            const remaining = (quantities[l.itemId] ?? 0) - l.qty;
+            if (remaining > 0) quantities[l.itemId] = remaining;
+            else delete quantities[l.itemId];
+          });
+          const plainLines = Object.entries(quantities)
+            .filter(([, qty]) => (qty as number) > 0)
+            .map(([itemId, qty]) => ({ itemId: Number(itemId), qty: qty as number }));
+          cart.loadFromLines([...savedLines, ...plainLines], items);
+        } else {
+          cart.loadFromQuantities(existing?.data?.quantity, items);
+        }
       })
       .catch(() => {
         /* best-effort preload -- an empty cart is a safe fallback */
@@ -126,13 +155,48 @@ function PosPage() {
     return { quantities, weights };
   }
 
+  // Same shape as buildQuantities' `weights` map, but for modifier detail -- only cart lines
+  // that actually have a modifier selection are included (a plain item is already fully
+  // represented by the flat `quantities` map, exactly as before this feature).
+  function buildLineDetail(): OrderLineDetail[] {
+    return cart.lines
+      .filter((l) => l.modifiers && l.modifiers.length > 0)
+      .map((l) => ({ itemId: l.item.id, qty: l.qty, modifiers: l.modifiers }));
+  }
+
+  async function handleAddItem(item: MenuItem) {
+    const cached = modifierGroupsCache.current.get(item.id);
+    if (cached !== undefined) {
+      if (cached.length > 0) setModifierPickerItem(item);
+      else cart.addItem(item);
+      return;
+    }
+    try {
+      const res = await getItemModifierGroups(item.id);
+      const groups = res.groups || [];
+      modifierGroupsCache.current.set(item.id, groups);
+      if (groups.length > 0) setModifierPickerItem(item);
+      else cart.addItem(item);
+    } catch {
+      // Best-effort: an item whose modifier groups fail to load is still fully usable plain,
+      // matching the fallback style used elsewhere in this app (printer/scale degradation).
+      modifierGroupsCache.current.set(item.id, []);
+      cart.addItem(item);
+    }
+  }
+
+  function handleConfirmModifiers(modifiers: SelectedModifier[]) {
+    if (modifierPickerItem) cart.addItem(modifierPickerItem, modifiers);
+    setModifierPickerItem(null);
+  }
+
   async function handleSendToKitchen() {
     if (!table || !orderId) return;
     setSendingToKitchen(true);
     setActionError(null);
     try {
       const { quantities } = buildQuantities();
-      await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
+      await sendTableOrderToKitchen(table, orderId, quantities, cart.total, buildLineDetail());
       setLastResult(`Sent to kitchen for table #${table}.`);
       // Course firing (CTO forensic audit 2026-09-20): a later course may now be sitting
       // held rather than already on the kitchen display -- refresh the held-courses bar.
@@ -176,12 +240,13 @@ function PosPage() {
     setChargeError(null);
     try {
       const { quantities, weights } = buildQuantities();
+      const lineDetail = buildLineDetail();
 
       const receiptLines = cartLinesToTicketLines(cart.lines);
       const paymentMethodLabel = isSplit ? 'split payment' : method!;
 
       if (isTableOrder && table && orderId) {
-        await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
+        await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lineDetail);
         await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges);
         await finishOrder(orderId, table);
         setShowPayment(false);
@@ -201,7 +266,7 @@ function PosPage() {
         return;
       }
 
-      const { order } = await sendDirectSaleToKitchen(quantities, cart.total, weights);
+      const { order } = await sendDirectSaleToKitchen(quantities, cart.total, weights, lineDetail);
       await chargeOrder(order.id, cart.total, method ?? 'card', splitCharges);
 
       setShowPayment(false);
@@ -269,7 +334,7 @@ function PosPage() {
         {loading && <p className="p-8 text-neutral-400">Loading menu…</p>}
         {error && <p className="p-8 text-red-600">{error}</p>}
         {!loading && !error && (
-          <ProductGrid categories={categories} items={items} onAdd={cart.addItem} onWeigh={setWeighingItem} />
+          <ProductGrid categories={categories} items={items} onAdd={handleAddItem} onWeigh={setWeighingItem} />
         )}
       </section>
 
@@ -304,6 +369,14 @@ function PosPage() {
             cart.addWeighedItem(weighingItem, weight);
             setWeighingItem(null);
           }}
+        />
+      )}
+
+      {modifierPickerItem && (
+        <ItemModifierPicker
+          item={modifierPickerItem}
+          onClose={() => setModifierPickerItem(null)}
+          onConfirm={handleConfirmModifiers}
         />
       )}
 

@@ -13,6 +13,35 @@ const { europeanDate, keys, generateReport } = require('../utils');
 const { nonKitchenItems } = require("../utils/constants");
 const { routeOrderToKitchen } = require('../services/kitchenRouting');
 const { sendItemsRespectingCourses } = require('../services/courseRouting');
+
+// Modifiers on kitchen tickets (CTO forensic audit 2026-09-20, "Gate 1: Order domain
+// completion"): best-effort enrichment of the flat product-id/quantity routedItems array
+// with a modifier-name summary, sourced from the POS's own `data.lines` detail (see
+// lib/api.ts's OrderLineDetail / sendTableOrderToKitchen on the frontend). Deliberately NOT
+// a rewrite of the underlying per-product-id diff routing -- that stays completely
+// untouched, matching every other item's shape exactly as before this feature -- this only
+// ever ADDS a `modifiers` key, and only to the items that actually have a selection.
+// KNOWN LIMITATION (documented rather than silently papered over): if the same product
+// appears as two separate cart lines with two DIFFERENT modifier selections, the flat
+// per-product-id routing has already summed them into one quantity by this point, so only
+// one line's modifier set can be shown against that combined quantity. Correctly
+// representing that case would require rewriting kitchen routing to work per-line instead
+// of per-product-id -- a much larger change than this follow-up, and out of scope here.
+function attachModifierSummaries(routedItems, dataLines) {
+    if (!Array.isArray(dataLines) || dataLines.length === 0) return routedItems;
+    const namesByItemId = new Map();
+    dataLines.forEach((line) => {
+        if (line && line.itemId !== undefined && Array.isArray(line.modifiers) && line.modifiers.length > 0) {
+            const names = line.modifiers.map((m) => m && m.name).filter(Boolean);
+            if (names.length > 0) namesByItemId.set(String(line.itemId), names);
+        }
+    });
+    if (namesByItemId.size === 0) return routedItems;
+    return routedItems.map((item) => {
+        const names = namesByItemId.get(String(item.id));
+        return names ? { ...item, modifiers: names } : item;
+    });
+}
 const loyalty = require('../services/loyaltyService');
 const { recordChange } = require('../services/offline/syncLog');
 const { calculateInclusiveTax } = require('../utils/tax');
@@ -534,7 +563,8 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
             // old tenant that predates migration 0009) must never stop the order from
             // reaching the kitchen the way it always has.
             try {
-                const routedItems = Object.entries(updatedQt).map(([id, quantity]) => ({ id, quantity }));
+                let routedItems = Object.entries(updatedQt).map(([id, quantity]) => ({ id, quantity }));
+                routedItems = attachModifierSummaries(routedItems, req.body.data && req.body.data.lines);
                 if (routedItems.length > 0) {
                     // Course firing (CTO forensic audit 2026-09-20): see the identical comment
                     // in acceptOrderHandler above -- same hold/fire behavior, same Preservation

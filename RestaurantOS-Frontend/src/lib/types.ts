@@ -53,12 +53,25 @@ export interface TaxRate {
   status: boolean | number;
 }
 
+// Modifiers wired into real order lines (CTO forensic audit 2026-09-20, "Gate 1: Order
+// domain completion" -- migration 0015 built the menu-configuration side of modifiers
+// (groups + options) but deliberately never touched the cart/order data model; this is that
+// follow-up. A SelectedModifier is a frozen snapshot of one chosen option (id/name/price at
+// the moment it was added) -- NOT a live reference to the ModifierGroup config, so a later
+// edit to a modifier's price in Settings never retroactively changes an already-placed order.
+export interface SelectedModifier {
+  id: number;
+  name: string;
+  price_delta: number;
+}
+
 export interface CartLine {
   item: MenuItem;
   qty: number;
   note?: string;
   weight?: number; // present only for sold_by_weight items -- the reading (in item.weight_unit) this line was priced at
   lineKey?: string; // stable identity for setQty/removeItem -- multiple weighings of the same item are separate lines
+  modifiers?: SelectedModifier[]; // e.g. [{name: 'Extra cheese', price_delta: 1.50}, {name: 'No onion', price_delta: 0}]
 }
 
 // Course firing (CTO forensic audit 2026-09-20): what's currently held back from the

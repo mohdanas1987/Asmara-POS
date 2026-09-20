@@ -55,6 +55,12 @@ export interface TicketLine {
   weight?: number;
   weightUnit?: string;
   linePrice: number;
+  // Modifiers (CTO forensic audit 2026-09-20): plain display strings (e.g. "Extra cheese
+  // (+€1.50)"), already formatted -- receipts/tickets just need to print them, not recompute
+  // anything from them. This is the one place in the whole modifier feature that is fully,
+  // certifiably accurate end-to-end, since it reads straight from the client-side cart lines
+  // that were actually charged, with no lossy flat-map round trip in between.
+  modifiers?: string[];
 }
 
 export interface ReceiptData {
@@ -75,13 +81,20 @@ export interface KitchenTicketData {
 }
 
 export function cartLinesToTicketLines(lines: CartLine[]): TicketLine[] {
-  return lines.map((l) => ({
-    name: l.item.name,
-    qty: l.qty,
-    weight: l.weight,
-    weightUnit: l.item.weight_unit,
-    linePrice: parsePrice(l.item.price) * (l.weight ?? l.qty),
-  }));
+  return lines.map((l) => {
+    const modifiersTotal = (l.modifiers ?? []).reduce((sum, m) => sum + (Number(m.price_delta) || 0), 0);
+    const unitPrice = parsePrice(l.item.price) + modifiersTotal;
+    return {
+      name: l.item.name,
+      qty: l.qty,
+      weight: l.weight,
+      weightUnit: l.item.weight_unit,
+      linePrice: unitPrice * (l.weight ?? l.qty),
+      modifiers: (l.modifiers ?? []).map((m) =>
+        m.price_delta ? `${m.name} (+€${m.price_delta.toFixed(2)})` : m.name
+      ),
+    };
+  });
 }
 
 function lineQtyLabel(line: TicketLine): string {
@@ -103,6 +116,9 @@ function buildReceiptTicket(data: ReceiptData): PrintInstruction[] {
 
   for (const line of data.lines) {
     ticket.push({ op: 'text', value: `${lineQtyLabel(line)}  ${line.name}` });
+    if (line.modifiers && line.modifiers.length > 0) {
+      ticket.push({ op: 'text', value: `   ${line.modifiers.join(', ')}` });
+    }
     ticket.push({ op: 'align', value: 'rt' }, { op: 'text', value: `EUR ${line.linePrice.toFixed(2)}` }, { op: 'align', value: 'lt' });
   }
 
@@ -136,6 +152,9 @@ function buildKitchenTicket(data: KitchenTicketData): PrintInstruction[] {
   ];
   for (const line of data.lines) {
     ticket.push({ op: 'text', value: `${lineQtyLabel(line)}  ${line.name}` }, { op: 'feed', lines: 1 });
+    if (line.modifiers && line.modifiers.length > 0) {
+      ticket.push({ op: 'style', size: [1, 1] }, { op: 'text', value: `   ${line.modifiers.join(', ')}` }, { op: 'style', size: [2, 2] }, { op: 'feed', lines: 1 });
+    }
   }
   ticket.push({ op: 'style', size: [1, 1] });
   if (data.note) ticket.push({ op: 'rule' }, { op: 'text', value: `Note: ${data.note}` });
@@ -145,10 +164,13 @@ function buildKitchenTicket(data: KitchenTicketData): PrintInstruction[] {
 
 function receiptHtml(data: ReceiptData): string {
   const rows = data.lines
-    .map(
-      (l) =>
-        `<tr><td>${lineQtyLabel(l)} ${escapeHtml(l.name)}</td><td style="text-align:right">€${l.linePrice.toFixed(2)}</td></tr>`
-    )
+    .map((l) => {
+      const modLine =
+        l.modifiers && l.modifiers.length > 0
+          ? `<tr><td colspan="2" style="color:#666;font-size:11px;padding-left:10px">${escapeHtml(l.modifiers.join(', '))}</td></tr>`
+          : '';
+      return `<tr><td>${lineQtyLabel(l)} ${escapeHtml(l.name)}</td><td style="text-align:right">€${l.linePrice.toFixed(2)}</td></tr>${modLine}`;
+    })
     .join('');
   return `<!doctype html><html><head><title>Receipt</title><style>
     body{font-family:monospace;width:280px;margin:0 auto;padding:12px;font-size:13px}
@@ -175,7 +197,15 @@ function receiptHtml(data: ReceiptData): string {
 }
 
 function kitchenTicketHtml(data: KitchenTicketData): string {
-  const rows = data.lines.map((l) => `<div class="line">${lineQtyLabel(l)} ${escapeHtml(l.name)}</div>`).join('');
+  const rows = data.lines
+    .map((l) => {
+      const modLine =
+        l.modifiers && l.modifiers.length > 0
+          ? `<div class="line" style="font-size:12px;font-weight:normal;padding-left:14px">${escapeHtml(l.modifiers.join(', '))}</div>`
+          : '';
+      return `<div class="line">${lineQtyLabel(l)} ${escapeHtml(l.name)}</div>${modLine}`;
+    })
+    .join('');
   return `<!doctype html><html><head><title>Kitchen ticket</title><style>
     body{font-family:monospace;width:280px;margin:0 auto;padding:12px}
     h1{text-align:center;font-size:20px;margin:0}

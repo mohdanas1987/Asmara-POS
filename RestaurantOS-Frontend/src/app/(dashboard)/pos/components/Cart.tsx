@@ -49,7 +49,9 @@ export function Cart({
         {lines.map((line) => {
           const key = line.lineKey ?? String(line.item.id);
           const isWeighed = typeof line.weight === 'number';
-          const linePrice = parsePrice(line.item.price) * (line.weight ?? line.qty);
+          const modifiersTotal = (line.modifiers ?? []).reduce((sum, m) => sum + (Number(m.price_delta) || 0), 0);
+          const unitPrice = parsePrice(line.item.price) + modifiersTotal;
+          const linePrice = unitPrice * (line.weight ?? line.qty);
           return (
             <div key={key} className="flex items-center justify-between border-b border-neutral-100 py-2.5 last:border-0">
               <div className="min-w-0 flex-1">
@@ -57,8 +59,18 @@ export function Cart({
                 <p className="text-xs text-neutral-500">
                   {isWeighed
                     ? `${line.weight!.toFixed(3)} ${line.item.weight_unit || 'kg'} × €${parsePrice(line.item.price).toFixed(2)}/${line.item.weight_unit || 'kg'}`
-                    : `€${parsePrice(line.item.price).toFixed(2)} each`}
+                    : `€${unitPrice.toFixed(2)} each`}
                 </p>
+                {/* Modifiers (CTO forensic audit 2026-09-20): shown as a compact sub-line so
+                    the cashier and the printed receipt/kitchen ticket all agree on exactly
+                    what was selected -- see lib/printing.ts's cartLinesToTicketLines. */}
+                {line.modifiers && line.modifiers.length > 0 && (
+                  <p className="truncate text-[11px] text-neutral-400">
+                    {line.modifiers
+                      .map((m) => (m.price_delta ? `${m.name} (+€${m.price_delta.toFixed(2)})` : m.name))
+                      .join(', ')}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {isWeighed ? (

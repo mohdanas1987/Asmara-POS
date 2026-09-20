@@ -114,14 +114,32 @@ export async function openRegister(openingCash: number) {
 // --- Real order lifecycle (table-first backend; this is the "direct sale" / counter-sale
 // path -- no table required, matches this POS screen's cart-first UX) ---
 
+// Modifier line detail (CTO forensic audit 2026-09-20): one real cart line's full detail,
+// sent as `data.lines` alongside the flat `data.quantity` map so a modifier selection isn't
+// lost the moment it's flattened into that per-product-id sum -- see sendDirectSaleToKitchen
+// and sendTableOrderToKitchen below.
+export interface OrderLineDetail {
+  itemId: number;
+  qty: number;
+  modifiers?: import('./types').SelectedModifier[];
+}
+
 export async function sendDirectSaleToKitchen(
   quantities: Record<number, number>,
   total: number,
-  weights?: Record<string, { itemName: string; weight: number; unit: string }>
+  weights?: Record<string, { itemName: string; weight: number; unit: string }>,
+  lines?: OrderLineDetail[]
 ) {
   const data: Record<string, unknown> = { quantity: quantities };
   if (weights && Object.keys(weights).length > 0) {
     data.weights = weights; // weight-based line detail, for receipt/kitchen display only
+  }
+  if (lines && lines.length > 0) {
+    // Modifier line detail (CTO forensic audit 2026-09-20, "Gate 1: Order domain
+    // completion"): a parallel field alongside `quantity`, exactly like `weights` above --
+    // never replaces the flat quantity map the backend's kitchen-routing diff logic reads,
+    // only adds per-line modifier detail for receipt/kitchen-ticket display and cart restore.
+    data.lines = lines;
   }
   return apiFetch<{ status: boolean; order: import('./types').Order; message: string }>(
     '/orders/to-kitchen',
@@ -725,11 +743,17 @@ export async function sendTableOrderToKitchen(
   tableNumber: string,
   orderId: number | string,
   quantities: Record<number, number>,
-  total: number
+  total: number,
+  lines?: OrderLineDetail[]
 ) {
+  const data: Record<string, unknown> = { quantity: quantities };
+  if (lines && lines.length > 0) {
+    // See the matching comment in sendDirectSaleToKitchen above -- same parallel-field pattern.
+    data.lines = lines;
+  }
   return apiFetch<{ status: boolean; message: string; order: import('./types').Order }>(
     `/orders/to-kitchen/${encodeURIComponent(tableNumber)}`,
-    { method: 'POST', body: JSON.stringify({ order_id: orderId, data: { quantity: quantities }, total }) }
+    { method: 'POST', body: JSON.stringify({ order_id: orderId, data, total }) }
   );
 }
 
