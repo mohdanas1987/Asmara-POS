@@ -27,6 +27,7 @@ import { parsePrice } from '@/lib/tax';
 import { publishCustomerDisplay } from '@/lib/customerDisplay';
 import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
 import { HeldCoursesBar } from './components/HeldCoursesBar';
+import { CartBillDialog } from './components/CartBillDialog';
 
 export default function PosPageWrapper() {
   // useSearchParams needs a Suspense boundary for the static parts of this route to still
@@ -65,6 +66,11 @@ function PosPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [preloaded, setPreloaded] = useState(false);
   const [heldCoursesRefresh, setHeldCoursesRefresh] = useState(0);
+  // Decoupling "view/print bill" from "close table" (CTO forensic audit 2026-09-20): a
+  // dedicated, read-only bill preview reachable straight from the active order screen --
+  // completely separate state from `showPayment`, so opening/closing it can never trigger
+  // chargeOrder or finishOrder.
+  const [showBill, setShowBill] = useState(false);
 
   // Resuming a table: pull in whatever's already on that order (sent to kitchen or not)
   // so re-opening a table shows what was already ordered, instead of an empty cart that
@@ -315,6 +321,13 @@ function PosPage() {
                 {sendingToKitchen ? 'Sending…' : 'Send to kitchen 🖨️'}
               </button>
               <button
+                onClick={() => setShowBill(true)}
+                disabled={cart.lines.length === 0}
+                className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+              >
+                View / print bill 🧾
+              </button>
+              <button
                 onClick={handleCancelTableOrder}
                 className="rounded-lg border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
               >
@@ -379,6 +392,17 @@ function PosPage() {
           onConfirm={handleConfirmModifiers}
         />
       )}
+
+      <CartBillDialog
+        open={showBill}
+        onClose={() => setShowBill(false)}
+        tableNumber={table}
+        orderId={orderId}
+        lines={cart.lines}
+        subtotal={cart.subtotal}
+        tax={cart.tax}
+        total={cart.total}
+      />
 
       {lastResult && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-lg bg-neutral-900 px-4 py-2 text-sm text-white shadow-lg">

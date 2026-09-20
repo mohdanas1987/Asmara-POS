@@ -271,3 +271,89 @@ export async function printKitchenTicket(data: KitchenTicketData): Promise<void>
   const printed = await tryHardwarePrint('kitchen', buildKitchenTicket(data));
   if (!printed) printHtmlFallback(kitchenTicketHtml(data));
 }
+
+// Decoupling "view/print bill" from "close table" (CTO forensic audit 2026-09-20): a waiter
+// needs to hand a customer a running total mid-meal without that action being anywhere near
+// charging the order or freeing the table -- the existing printReceipt/chargeOrder/
+// finishOrder flow only ever runs together, at actual checkout. This is a clearly-labeled
+// "BILL -- not yet paid" ticket that only ever reads data, calling neither chargeOrder nor
+// finishOrder, and prints through the exact same hardware/fallback path as a real receipt.
+function buildBillTicket(data: ReceiptData): PrintInstruction[] {
+  const ticket: PrintInstruction[] = [
+    { op: 'align', value: 'ct' },
+    { op: 'style', bold: true, size: [2, 2] },
+    { op: 'text', value: 'Asmara' },
+    { op: 'style', bold: false, size: [1, 1] },
+    { op: 'text', value: 'BILL -- not a receipt' },
+    { op: 'feed', lines: 1 },
+    { op: 'text', value: new Date().toLocaleString() },
+  ];
+  if (data.tableNumber) ticket.push({ op: 'text', value: `Table #${data.tableNumber}` });
+  if (data.orderId) ticket.push({ op: 'text', value: `Order #${data.orderId}` });
+  ticket.push({ op: 'feed', lines: 1 }, { op: 'rule' }, { op: 'align', value: 'lt' });
+
+  for (const line of data.lines) {
+    ticket.push({ op: 'text', value: `${lineQtyLabel(line)}  ${line.name}` });
+    if (line.modifiers && line.modifiers.length > 0) {
+      ticket.push({ op: 'text', value: `   ${line.modifiers.join(', ')}` });
+    }
+    ticket.push({ op: 'align', value: 'rt' }, { op: 'text', value: `EUR ${line.linePrice.toFixed(2)}` }, { op: 'align', value: 'lt' });
+  }
+
+  ticket.push(
+    { op: 'rule' },
+    { op: 'align', value: 'rt' },
+    { op: 'text', value: `Subtotal  EUR ${data.subtotal.toFixed(2)}` },
+    { op: 'text', value: `VAT       EUR ${data.tax.toFixed(2)}` },
+    { op: 'style', bold: true },
+    { op: 'text', value: `TOTAL DUE EUR ${data.total.toFixed(2)}` },
+    { op: 'style', bold: false },
+    { op: 'align', value: 'ct' },
+    { op: 'feed', lines: 3 },
+  );
+  return ticket;
+}
+
+function billHtml(data: ReceiptData): string {
+  const rows = data.lines
+    .map((l) => {
+      const modLine =
+        l.modifiers && l.modifiers.length > 0
+          ? `<tr><td colspan="2" style="color:#666;font-size:11px;padding-left:10px">${escapeHtml(l.modifiers.join(', '))}</td></tr>`
+          : '';
+      return `<tr><td>${lineQtyLabel(l)} ${escapeHtml(l.name)}</td><td style="text-align:right">€${l.linePrice.toFixed(2)}</td></tr>${modLine}`;
+    })
+    .join('');
+  return `<!doctype html><html><head><title>Bill</title><style>
+    body{font-family:monospace;width:280px;margin:0 auto;padding:12px;font-size:13px}
+    h1{text-align:center;font-size:18px;margin:0 0 4px}
+    .meta{text-align:center;color:#555;margin-bottom:8px}
+    .badge{text-align:center;font-weight:bold;color:#b45309;margin-bottom:4px}
+    table{width:100%;border-collapse:collapse}
+    td{padding:2px 0}
+    .rule{border-top:1px dashed #000;margin:6px 0}
+    .total{font-weight:bold;font-size:15px}
+  </style></head><body>
+    <h1>Asmara</h1>
+    <div class="badge">BILL -- not a receipt</div>
+    <div class="meta">${new Date().toLocaleString()}${data.tableNumber ? ` · Table #${escapeHtml(String(data.tableNumber))}` : ''}${data.orderId ? ` · #${escapeHtml(String(data.orderId))}` : ''}</div>
+    <div class="rule"></div>
+    <table>${rows}</table>
+    <div class="rule"></div>
+    <table>
+      <tr><td>Subtotal</td><td style="text-align:right">€${data.subtotal.toFixed(2)}</td></tr>
+      <tr><td>VAT</td><td style="text-align:right">€${data.tax.toFixed(2)}</td></tr>
+      <tr class="total"><td>Total due</td><td style="text-align:right">€${data.total.toFixed(2)}</td></tr>
+    </table>
+  </body></html>`;
+}
+
+/**
+ * Prints a running bill for the table's CURRENT order state -- purely informational, never
+ * charges anything and never touches the table's status. Safe to call as many times as a
+ * customer asks to see the total again mid-meal.
+ */
+export async function printBillPreview(data: ReceiptData): Promise<void> {
+  const printed = await tryHardwarePrint('receipt', buildBillTicket(data));
+  if (!printed) printHtmlFallback(billHtml(data));
+}
