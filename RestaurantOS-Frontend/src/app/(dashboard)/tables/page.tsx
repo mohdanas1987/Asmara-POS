@@ -21,13 +21,16 @@ type Mode = 'view' | 'transfer' | 'merge' | 'free-selected';
 
 export default function TablesPage() {
   const router = useRouter();
-  const { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, openTable } = useTables();
+  const { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, split, openTable } = useTables();
   const { items: menuItems } = useMenu();
 
   const [mode, setMode] = useState<Mode>('view');
   const [transferFrom, setTransferFrom] = useState<string | null>(null);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [billTable, setBillTable] = useState<TableRow | null>(null);
+  // Table split (CTO forensic audit 2026-09-20): the table whose merged-group split is being
+  // confirmed -- opens a small "which table keeps the bill" chooser rather than guessing.
+  const [splitTableRow, setSplitTableRow] = useState<TableRow | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -80,6 +83,29 @@ export default function TablesPage() {
       router.push(`/pos?table=${encodeURIComponent(tableNumber)}&order=${orderId}`);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not open this table.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // A table is part of a merged group if its own `linked_to` carries the "+"-joined combo
+  // (see routes/orders.js's linkTablesHandler) -- every table in the group gets the same
+  // value, so any one of them is enough to recover the full member list.
+  function mergedGroupOf(table: TableRow): string[] {
+    const raw = table.linked_to;
+    if (!raw) return [table.table_number];
+    const parts = String(raw).split('+').filter(Boolean);
+    return parts.length > 1 ? parts : [table.table_number];
+  }
+
+  async function handleSplit(tableNumber: string, keepOn: string) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await split(tableNumber, keepOn);
+      setSplitTableRow(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not split this table.');
     } finally {
       setBusy(false);
     }
@@ -223,6 +249,21 @@ export default function TablesPage() {
                     🧾
                   </button>
                 )}
+                {mode === 'view' && mergedGroupOf(t).length > 1 && (
+                  <button
+                    type="button"
+                    title="Split this merged table"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActionError(null);
+                      setSplitTableRow(t);
+                    }}
+                    style={{ position: 'absolute', left: t.x - 12, top: t.y + Math.max(t.width, 72) - 14 }}
+                    className="touch-target flex h-7 w-7 items-center justify-center rounded-full border border-border bg-surface text-xs shadow-sm hover:border-brand hover:text-brand"
+                  >
+                    ⑃
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -246,6 +287,33 @@ export default function TablesPage() {
                 #{t.table_number}
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {splitTableRow && (
+        <div className="fixed bottom-4 left-1/2 w-full max-w-md -translate-x-1/2 rounded-xl border border-border bg-surface-raised p-4 shadow-lg">
+          <p className="mb-2 text-sm font-medium text-ink">
+            Split merged table {mergedGroupOf(splitTableRow).map((n) => `#${n}`).join(' + ')} — which table keeps the running bill?
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {mergedGroupOf(splitTableRow).map((n) => (
+              <button
+                key={n}
+                disabled={busy}
+                onClick={() => handleSplit(mergedGroupOf(splitTableRow).join('+'), n)}
+                className="touch-target rounded-lg border border-border px-3 text-sm hover:border-brand hover:text-brand disabled:opacity-50"
+              >
+                Keep on #{n}
+              </button>
+            ))}
+            <button
+              disabled={busy}
+              onClick={() => setSplitTableRow(null)}
+              className="touch-target rounded-lg px-3 text-sm text-ink-muted hover:text-ink disabled:opacity-50"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

@@ -81,9 +81,78 @@ router.post('/update-position/:table', fetchuser, async (req, res) => {
     }
 });
 
+// CTO forensic audit (2026-09-20): flagged as the concrete counterpart to table merging --
+// merge (POST /orders/link/:tables) genuinely works, but the only thing that existed to undo
+// it was this handler, and it was destructive: it unlinked the tables AND deleted whatever
+// order was already running on the merged group outright, discarding real, already-ordered
+// items with no way back. That's not a "split" a restaurant can actually use mid-service --
+// it's a forced cancel. Rewritten so a genuine merged-group split (table_number containing
+// "+") keeps the running order alive on ONE chosen table (`keep_on` in the body, defaulting
+// to the first table in the group) and simply frees the others, instead of deleting anything.
+// A single, non-merged table_number (no "+") is UNCHANGED from before this fix -- some caller
+// may already depend on that as a hard "cancel and free this table" operation, and this fix
+// is scoped to the actual merged-table-split gap, not a rewrite of unrelated behavior.
 async function splitTableHandler(req, res) {
     try {
-        const tables = req.params.table_number.split('+');
+        const tableNumber = req.params.table_number;
+        const tables = tableNumber.split('+');
+        const isMergedGroup = tables.length > 1;
+
+        if (isMergedGroup) {
+            const requestedKeepOn = req.body && req.body.keep_on;
+            const keepOn = requestedKeepOn && tables.includes(requestedKeepOn) ? requestedKeepOn : tables[0];
+            const freedTables = tables.filter((t) => t !== keepOn);
+
+            const order = await Order.query()
+                .where('tenant_id', req.body.tenant_id)
+                .where('tables', tableNumber)
+                .whereNot('status', 'completed')
+                .first();
+
+            await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tables).patch({
+                linked_to: null
+            });
+
+            if (order) {
+                // The order that used to span the whole merged group now belongs to just the
+                // one table the cashier chose to keep it on -- exactly like a single-table
+                // order, and fully resumable from the POS the same way (GET /orders/'s
+                // tableOrders map already indexes by individual table number, so this needs
+                // no other change to be picked up correctly).
+                await Order.query().patchAndFetchById(order.id, { tables: keepOn }).where('tenant_id', req.body.tenant_id);
+                await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', keepOn).patch({ status: 'occupied' });
+            } else {
+                await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', keepOn).patch({ status: 'free' });
+            }
+
+            if (freedTables.length > 0) {
+                await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', freedTables).patch({ status: 'free' });
+            }
+
+            try {
+                await recordChange({
+                    tenantId: req.body.tenant_id,
+                    terminalId: req.body.terminal_id || 'unknown-terminal',
+                    entityType: 'table_split',
+                    entityId: tableNumber,
+                    operation: 'update',
+                    payload: { tables, keep_on: keepOn, freed: freedTables, order_id: order ? order.id : null },
+                });
+            } catch (syncError) {
+                console.log('[offline-sync] non-fatal: could not record table split change:', syncError.message);
+            }
+
+            return res.json({
+                status: true,
+                message: order
+                    ? `Tables split -- the running order stays on table ${keepOn}, the rest are now free.`
+                    : "Tables split and freed.",
+                keptOn: keepOn,
+                freed: freedTables,
+            });
+        }
+
+        // Single, non-merged table -- unchanged legacy behavior.
         const updated = await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tables).patch({
             linked_to: null
         });

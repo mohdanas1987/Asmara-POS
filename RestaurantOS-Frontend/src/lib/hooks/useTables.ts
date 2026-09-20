@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { getTables, updateTablePosition, transferTable, freeAllTables, freeSelectedTables, mergeTables, getOrders, initTableOrder } from '@/lib/api';
+import { getTables, updateTablePosition, transferTable, freeAllTables, freeSelectedTables, mergeTables, splitTable, getOrders, initTableOrder } from '@/lib/api';
 import { getTerminalId } from '@/lib/terminal';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 
@@ -87,6 +87,18 @@ export function useTables() {
     [refresh]
   );
 
+  // Table split (CTO forensic audit 2026-09-20): the real counterpart to merge() above --
+  // unlinks a merged group and keeps its running order on `keepOn`, freeing the rest, rather
+  // than the old backend behavior of deleting the order outright. `tableNumber` is any member
+  // of the merged group (its own `linked_to` string carries the full group).
+  const split = useCallback(
+    async (tableNumber: string, keepOn?: string) => {
+      await splitTable(tableNumber, keepOn);
+      await refresh();
+    },
+    [refresh]
+  );
+
   // Clicking a table: free -> starts a brand-new order there (real backend call, locks the
   // table amber immediately). Occupied/ongoing -> resumes whichever order is already open
   // on it (looked up from GET /orders/'s tableOrders map -- no guessing, no separate fetch).
@@ -112,5 +124,5 @@ export function useTables() {
     [tableOrders, refresh]
   );
 
-  return { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, openTable, refresh };
+  return { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, split, openTable, refresh };
 }

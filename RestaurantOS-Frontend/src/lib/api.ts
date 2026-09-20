@@ -225,6 +225,17 @@ export async function mergeTables(tableNumbers: string[]) {
   );
 }
 
+// Table split (CTO forensic audit 2026-09-20): the real counterpart to mergeTables() above --
+// unlinks a merged group and keeps its running order on whichever ONE table `keepOn` names
+// (defaulting server-side to the first table in the group), freeing the rest, instead of the
+// old behavior of deleting the order outright. See routes/tables.js's splitTableHandler.
+export async function splitTable(tableNumber: string, keepOn?: string) {
+  return apiFetch<{ status: boolean; message: string; keptOn?: string; freed?: string[] }>(
+    `/tables/split-table/${encodeURIComponent(tableNumber)}`,
+    { method: 'POST', body: JSON.stringify(keepOn ? { keep_on: keepOn } : {}) }
+  );
+}
+
 export async function updateTableDetails(tableNumber: string, details: { capacity?: number; section?: string }) {
   return apiFetch<{ status: boolean; message: string }>(
     `/tables/${encodeURIComponent(tableNumber)}/details`,
