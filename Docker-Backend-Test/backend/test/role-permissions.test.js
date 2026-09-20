@@ -34,12 +34,19 @@ test('with no overrides, the tenant-aware check matches the original hardcoded d
     }
 });
 
-test('a waiter is refused orders.void by default, matching the hardcoded map', async () => {
+test('a waiter is refused payments.refund by default, matching the hardcoded map', async () => {
+    // NOTE: PERMISSIONS.ORDERS_VOID is declared in config/permissions.js but, discovered
+    // while writing this test, is not actually enforced by any route in this codebase
+    // (routes/orders.js's /cancel is fetchuser-only, no requirePermission call at all) --
+    // a pre-existing gap, out of scope for this feature, flagged rather than silently
+    // fixed. PAYMENTS_REFUND is a real, enforced permission a waiter genuinely lacks, so
+    // it's what this test actually exercises against a live route.
     const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-rp@test.local', role: 'waiter' });
     const res = await request(ctx.app)
-        .post('/orders/cancel/seed_order_001/1')
-        .set('asmara-token', waiterToken);
-    assert.equal(res.status, 401);
+        .post('/orders/seed_order_001/refund')
+        .set('asmara-token', waiterToken)
+        .send({ amount: 1 });
+    assert.equal(res.status, 403);
 });
 
 test('GET /roles/permissions returns the full matrix with no overrides marked', async () => {
