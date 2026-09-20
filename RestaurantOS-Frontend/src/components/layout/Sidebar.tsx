@@ -16,7 +16,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { Button } from '@/components/ui/Button';
 import { getCurrentRole } from '@/lib/auth';
@@ -67,10 +67,26 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const STORAGE_KEY = 'restaurantos-sidebar-collapsed';
+// Sidebar drag-resize (CTO forensic audit 2026-09-20): the sidebar previously only supported
+// two fixed widths via the collapse toggle (w-16 / w-56) -- no drag-to-resize at all. This
+// adds a real, user-draggable width for the expanded state, persisted separately from the
+// collapse flag so collapsing/expanding never clobbers a width the user picked.
+const WIDTH_STORAGE_KEY = 'restaurantos-sidebar-width';
+const COLLAPSED_WIDTH = 64; // matches the old w-16
+const DEFAULT_WIDTH = 224; // matches the old w-56
+const MIN_WIDTH = 180;
+const MAX_WIDTH = 360;
+
+function clampWidth(width: number): number {
+  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+}
 
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const [resizing, setResizing] = useState(false);
+  const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
   // Role is read from the JWT client-side only after mount, so SSR and the first client
   // render agree (avoids a hydration mismatch). Until then, `role` is null and
   // roleHasPermission(null, ...) is false for everything -- so on first paint no gated item
@@ -80,11 +96,56 @@ export function Sidebar() {
   useEffect(() => {
     try {
       setCollapsed(window.localStorage.getItem(STORAGE_KEY) === 'true');
+      const savedWidth = Number(window.localStorage.getItem(WIDTH_STORAGE_KEY));
+      if (Number.isFinite(savedWidth) && savedWidth > 0) setWidth(clampWidth(savedWidth));
     } catch {
-      // localStorage unavailable -- default (expanded) is a perfectly fine fallback.
+      // localStorage unavailable -- the defaults (expanded, DEFAULT_WIDTH) are a fine fallback.
     }
     setRole(getCurrentRole());
   }, []);
+
+  const handleResizePointerMove = useCallback((e: PointerEvent) => {
+    if (!dragStartRef.current) return;
+    const { startX, startWidth } = dragStartRef.current;
+    setWidth(clampWidth(startWidth + (e.clientX - startX)));
+  }, []);
+
+  const handleResizePointerUp = useCallback(() => {
+    dragStartRef.current = null;
+    setResizing(false);
+    window.removeEventListener('pointermove', handleResizePointerMove);
+    window.removeEventListener('pointerup', handleResizePointerUp);
+    // Persist on release rather than on every pixel of movement -- avoids hammering
+    // localStorage during a drag while still saving the final chosen width.
+    setWidth((current) => {
+      try {
+        window.localStorage.setItem(WIDTH_STORAGE_KEY, String(current));
+      } catch {
+        // Best-effort persistence only -- the resize still works for this session.
+      }
+      return current;
+    });
+  }, [handleResizePointerMove]);
+
+  function handleResizePointerDown(e: React.PointerEvent) {
+    if (collapsed) return; // nothing to resize while collapsed -- fixed width
+    dragStartRef.current = { startX: e.clientX, startWidth: width };
+    setResizing(true);
+    window.addEventListener('pointermove', handleResizePointerMove);
+    window.addEventListener('pointerup', handleResizePointerUp);
+  }
+
+  // Double-clicking the resize handle resets to the default width -- the same "reset"
+  // affordance most desktop apps' resizable panels support, and an easy way back if a drag
+  // goes further than intended.
+  function handleResizeDoubleClick() {
+    setWidth(DEFAULT_WIDTH);
+    try {
+      window.localStorage.setItem(WIDTH_STORAGE_KEY, String(DEFAULT_WIDTH));
+    } catch {
+      // Best-effort persistence only.
+    }
+  }
 
   function toggleCollapsed() {
     setCollapsed((prev) => {
@@ -105,11 +166,27 @@ export function Sidebar() {
 
   return (
     <nav
+      style={{ width: collapsed ? COLLAPSED_WIDTH : width }}
       className={clsx(
-        'flex h-screen flex-col gap-1 border-r border-border bg-surface py-4 transition-[width] duration-150',
-        collapsed ? 'w-16 items-center' : 'w-56 items-stretch px-3'
+        'relative flex h-screen flex-shrink-0 flex-col gap-1 border-r border-border bg-surface py-4',
+        !resizing && 'transition-[width] duration-150',
+        collapsed ? 'items-center' : 'items-stretch px-3'
       )}
     >
+      {!collapsed && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize (double-click to reset)"
+          onPointerDown={handleResizePointerDown}
+          onDoubleClick={handleResizeDoubleClick}
+          className={clsx(
+            'absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize select-none hover:bg-brand/30',
+            resizing && 'bg-brand/40'
+          )}
+        />
+      )}
       <div className={clsx('mb-2 flex items-center gap-2 px-2', collapsed && 'justify-center px-0')}>
         <Image src="/asmara-logo.png" alt="Asmara Restaurant" width={32} height={32} className="rounded-md object-contain" />
         {!collapsed && <span className="text-lg font-bold text-brand">Asmara</span>}
