@@ -41,7 +41,8 @@ router.get('/', fetchuser, async (req,res) => { // updated function
             'pos',
             'category_id',
             'sold_by_weight',
-            'weight_unit'
+            'weight_unit',
+            'course'
         ];
 
         const tenantId = req.body.tenant_id;
@@ -119,6 +120,9 @@ router.post('/create', [upload.single('image'), fetchuser ], async(req, res) => 
             category_id: req.body.category_id,
             sold_by_weight: req.body.sold_by_weight === true || req.body.sold_by_weight === 'true',
             weight_unit: req.body.weight_unit || 'kg',
+            // Course firing (CTO forensic audit 2026-09-20): null/'starter' means "fire
+            // immediately", matching every item created before this field existed.
+            course: req.body.course || null,
             // BUG FIX (Task #36 / VAT-inclusive pricing sub-task): this is the route the real
             // frontend (src/lib/api.ts's createItem()) actually calls, but it never included
             // `tax` in the insert payload at all -- every item created through the live UI
@@ -283,6 +287,9 @@ router.post('/update', [upload.single('uploaded'),fetchuser], async(req, res) =>
         }
         if (req.body.weight_unit) {
             body.weight_unit = req.body.weight_unit;
+        }
+        if (typeof req.body.course !== 'undefined') {
+            body.course = req.body.course || null;
         }
 
         if(req.file) {

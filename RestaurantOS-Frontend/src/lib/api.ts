@@ -313,6 +313,8 @@ export interface ItemFormInput {
   // /items/create and /items/update now persist this (previously /create silently dropped
   // it, and no UI ever offered a way to set it at all).
   tax?: string;
+  // Course firing (CTO forensic audit 2026-09-20): unset/'starter' fires immediately.
+  course?: string;
 }
 
 export async function createItem(input: ItemFormInput) {
@@ -324,6 +326,7 @@ export async function createItem(input: ItemFormInput) {
   form.set('sold_by_weight', String(!!input.sold_by_weight));
   form.set('weight_unit', input.weight_unit || 'kg');
   if (input.tax) form.set('tax', input.tax);
+  if (input.course) form.set('course', input.course);
   if (input.image) form.set('image', input.image);
   return apiFetchForm<{ status: boolean; message: string; product: import('./types').MenuItem }>(
     '/items/create',
@@ -342,8 +345,91 @@ export async function updateItem(id: number, input: ItemFormInput & { code: stri
   form.set('sold_by_weight', String(!!input.sold_by_weight));
   form.set('weight_unit', input.weight_unit || 'kg');
   if (input.tax) form.set('tax', input.tax);
+  if (input.course) form.set('course', input.course);
   if (input.image) form.set('uploaded', input.image);
   return apiFetchForm<{ status: boolean; updated: import('./types').MenuItem }>('/items/update', form);
+}
+
+// --- Course firing (CTO forensic audit 2026-09-20, task "Courses") ---
+
+export async function getHeldCourses(orderId: string) {
+  return apiFetch<{ status: boolean; held: import('./types').HeldCourse[] }>(`/kitchen/held-courses/${orderId}`);
+}
+
+export async function fireCourse(orderId: string, course: string) {
+  return apiFetch<{ status: boolean; message: string }>('/kitchen/fire-course', {
+    method: 'POST',
+    body: JSON.stringify({ order_id: orderId, course }),
+  });
+}
+
+// --- Staff management + quick-login (CTO forensic audit 2026-09-20) ---
+
+export async function listStaff() {
+  return apiFetch<{ status: boolean; staff: import('./types').StaffMember[] }>('/users');
+}
+
+export async function createStaff(input: { name: string; email: string; password: string; role: string }) {
+  return apiFetch<{ status: boolean; message?: string; key?: string; user?: { id: number } }>('/users', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateStaff(id: number, input: { role?: string; status?: boolean }) {
+  return apiFetch<{ status: boolean; message: string }>(`/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setStaffPin(id: number, pin: string) {
+  return apiFetch<{ status: boolean; message: string }>(`/users/${id}/pin`, {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+}
+
+export async function issueQrBadge(id: number) {
+  return apiFetch<{ status: boolean; qr_token: string }>(`/users/${id}/qr-badge`, { method: 'POST' });
+}
+
+export async function revokeQrBadge(id: number) {
+  return apiFetch<{ status: boolean }>(`/users/${id}/qr-badge`, { method: 'DELETE' });
+}
+
+export async function pinLogin(pin: string) {
+  return apiFetch<{ status: boolean; authToken: string; message?: string }>('/auth/pin-login', {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+}
+
+export async function qrLogin(qrToken: string) {
+  return apiFetch<{ status: boolean; authToken: string; message?: string }>('/auth/qr-login', {
+    method: 'POST',
+    body: JSON.stringify({ qr_token: qrToken }),
+  });
+}
+
+// --- Roles & Permissions (CTO forensic audit 2026-09-20, task "role_permissions") ---
+
+export async function getRolePermissionMatrix() {
+  return apiFetch<{ status: boolean; matrix: import('./types').RolePermissionRow[] }>('/roles/permissions');
+}
+
+export async function setRolePermission(role: string, permission: string, enabled: boolean) {
+  return apiFetch<{ status: boolean; message: string }>('/roles/permissions', {
+    method: 'PATCH',
+    body: JSON.stringify({ role, permission, enabled }),
+  });
+}
+
+export async function resetRolePermission(role: string, permission: string) {
+  return apiFetch<{ status: boolean; message: string }>('/roles/permissions', {
+    method: 'DELETE',
+    body: JSON.stringify({ role, permission }),
+  });
 }
 
 // --- Tax rates (routes/tax.js) ---

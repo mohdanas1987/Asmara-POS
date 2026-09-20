@@ -12,6 +12,7 @@ const fs = require('fs');
 const { europeanDate, keys, generateReport } = require('../utils');
 const { nonKitchenItems } = require("../utils/constants");
 const { routeOrderToKitchen } = require('../services/kitchenRouting');
+const { sendItemsRespectingCourses } = require('../services/courseRouting');
 const loyalty = require('../services/loyaltyService');
 const { recordChange } = require('../services/offline/syncLog');
 const { calculateInclusiveTax } = require('../utils/tax');
@@ -217,7 +218,11 @@ async function acceptOrderHandler(req, res) {
             const { items: onlineItems } = JSON.parse(order.data || '{}');
             const routedItems = (onlineItems || []).map((it) => ({ id: it.id, quantity: it.qty ?? it.quantity ?? 1 }));
             if (routedItems.length > 0) {
-                const tickets = await routeOrderToKitchen({
+                // Course firing (CTO forensic audit 2026-09-20): items on a held course (e.g.
+                // "main"/"dessert") don't get a kitchen ticket here at all yet -- they wait in
+                // held_course_items until a waiter fires that course. Items with no course (or
+                // 'starter') are routed immediately, exactly as before.
+                const tickets = await sendItemsRespectingCourses({
                     tenantId: req.body.tenant_id,
                     orderId: order.id,
                     tableNumber: order.tables,
@@ -531,7 +536,10 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
             try {
                 const routedItems = Object.entries(updatedQt).map(([id, quantity]) => ({ id, quantity }));
                 if (routedItems.length > 0) {
-                    const tickets = await routeOrderToKitchen({
+                    // Course firing (CTO forensic audit 2026-09-20): see the identical comment
+                    // in acceptOrderHandler above -- same hold/fire behavior, same Preservation
+                    // Contract for items with no course set.
+                    const tickets = await sendItemsRespectingCourses({
                         tenantId: req.body.tenant_id,
                         orderId: order.id,
                         tableNumber: order.tables,

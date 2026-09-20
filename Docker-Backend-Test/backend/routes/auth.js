@@ -236,6 +236,69 @@ router.get('/getuser', fetchuser, async(req, res) => {
     }
 });
 
+// --- Staff quick-login: PIN + QR badge (CTO forensic audit 2026-09-20, task "QR staff
+// login" -- flagged as never built, correctly). Both require an EXISTING valid session
+// (fetchuser) -- the terminal must already be unlocked by a real email/password login once;
+// after that, staff can swap who's "active" on that terminal all shift without a full
+// logout, and the switch is scoped to the currently-authenticated tenant (never leaks
+// across tenants, since fetchuser's req.body.tenant_id comes only from a verified JWT).
+
+router.post('/pin-login', fetchuser, [
+    body('pin').isLength({ min: 4, max: 8 }),
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ status: false, message: errors.array()[0].msg });
+        }
+        const candidates = await User.query()
+            .where('tenant_id', req.body.tenant_id)
+            .whereNotNull('pin_hash')
+            .where('status', true);
+
+        let matched = null;
+        for (const candidate of candidates) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await bcrypt.compare(req.body.pin, candidate.pin_hash)) {
+                matched = candidate;
+                break;
+            }
+        }
+        if (!matched) {
+            return res.status(400).json({ status: false, message: 'Incorrect PIN.' });
+        }
+
+        const authToken = jwt.sign({ user: { id: matched.id, tenant_id: matched.tenant_id, role: matched.role || matched.type || 'admin' } }, JWT_SECRET);
+        return res.json({ status: true, authToken, user: matched, currency: '€ ' });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
+router.post('/qr-login', fetchuser, [
+    body('qr_token').isLength({ min: 8 }),
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ status: false, message: errors.array()[0].msg });
+        }
+        const matched = await User.query()
+            .where('tenant_id', req.body.tenant_id)
+            .where('qr_token', req.body.qr_token)
+            .where('status', true)
+            .first();
+        if (!matched) {
+            return res.status(400).json({ status: false, message: 'Unrecognized badge.' });
+        }
+
+        const authToken = jwt.sign({ user: { id: matched.id, tenant_id: matched.tenant_id, role: matched.role || matched.type || 'admin' } }, JWT_SECRET);
+        return res.json({ status: true, authToken, user: matched, currency: '€ ' });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
 router.get("/seed", async(req,res)=> {
     // const salt = await bcrypt.genSalt(8);
     // const password = await bcrypt.hash('121212', salt);

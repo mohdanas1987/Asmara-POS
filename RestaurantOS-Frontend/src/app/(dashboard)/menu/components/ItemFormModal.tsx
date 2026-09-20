@@ -31,6 +31,9 @@ export function ItemFormModal({
   const [categoryId, setCategoryId] = useState<number | ''>(item?.category_id ?? '');
   const [soldByWeight, setSoldByWeight] = useState(Boolean(item?.sold_by_weight));
   const [weightUnit, setWeightUnit] = useState<'kg' | 'g' | 'lb'>(item?.weight_unit ?? 'kg');
+  // Course firing (CTO forensic audit 2026-09-20): '' means "no course" -> fires immediately,
+  // same as 'starter'.
+  const [course, setCourse] = useState<string>(item?.course ?? '');
   const [image, setImage] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +75,7 @@ export function ItemFormModal({
           sold_by_weight: soldByWeight,
           weight_unit: weightUnit,
           tax: taxAmount || undefined,
+          course: course || undefined,
           image,
           existingImage: item.image ?? null,
         });
@@ -86,6 +90,7 @@ export function ItemFormModal({
           sold_by_weight: soldByWeight,
           weight_unit: weightUnit,
           tax: taxAmount || undefined,
+          course: course || undefined,
           image,
         });
         if (!res.status) throw new Error(res.message || 'Could not create item.');
@@ -183,6 +188,25 @@ export function ItemFormModal({
                 Price is VAT-inclusive: €{calculateInclusiveTax(price.trim(), taxAmount).toFixed(2)} of the price above is VAT.
               </p>
             )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-500">Course</label>
+            <select
+              value={course}
+              onChange={(e) => setCourse(e.target.value)}
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+            >
+              <option value="">No course (fires to kitchen immediately)</option>
+              <option value="starter">Starter</option>
+              <option value="main">Main</option>
+              <option value="dessert">Dessert</option>
+              <option value="other">Other (held)</option>
+            </select>
+            <p className="mt-1 text-[11px] text-neutral-400">
+              "Starter" and "No course" fire to the kitchen the moment they're sent. Any later course is held at the
+              table until a waiter fires it (Tables → active order → "Fire course").
+            </p>
           </div>
 
           <div className="rounded-lg border border-neutral-200 p-3">

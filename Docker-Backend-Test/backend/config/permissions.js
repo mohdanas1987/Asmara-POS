@@ -62,11 +62,55 @@ const ROLE_PERMISSIONS = Object.freeze({
 
 const KNOWN_ROLES = Object.freeze(Object.keys(ROLE_PERMISSIONS));
 
-/** True if `role` grants `permission` (admin's '*' grants everything). */
+/** True if `role` grants `permission` (admin's '*' grants everything). Pure, hardcoded-map
+ * lookup -- no DB, no tenant. This is the ORIGINAL function, deliberately left unchanged
+ * (existing callers and existing tests depend on this exact two-argument, synchronous
+ * signature). It's now also the fallback `roleHasPermissionForTenant` uses when a tenant has
+ * no override row for a given (role, permission) pair -- which is every tenant, always,
+ * unless someone has explicitly customized something in Settings > Roles & Permissions. */
 function roleHasPermission(role, permission) {
   const perms = ROLE_PERMISSIONS[String(role || '').toLowerCase()];
   if (!perms) return false;
   return perms.includes('*') || perms.includes(permission);
 }
 
-module.exports = { PERMISSIONS, ROLE_PERMISSIONS, KNOWN_ROLES, roleHasPermission };
+// role_permissions as a real, editable table (CTO forensic audit 2026-09-20, task
+// "role_permissions"). admin's wildcard ('*' in the hardcoded map) is intentionally NOT
+// overridable here -- an admin account must always retain full access, or a mistaken/
+// malicious override could lock every admin out of their own restaurant with no recovery
+// path. Every other role's individual permissions can be toggled per tenant.
+let RolePermissionModel = null;
+function getRolePermissionModel() {
+  // Lazy require to avoid a circular dependency (models/TenantModel.js has no dependency on
+  // this file, but requiring Objection models eagerly at module-load time, before the app's
+  // knex instance is bound via Model.knex(), can throw in some boot orders).
+  if (!RolePermissionModel) RolePermissionModel = require('../models/RolePermission');
+  return RolePermissionModel;
+}
+
+/**
+ * Tenant-aware permission check used by middlewares/requirePermission.js. Checks for an
+ * explicit per-tenant override row first; falls back to the hardcoded default (identical to
+ * roleHasPermission()) when none exists -- which is the case for every tenant that has never
+ * touched Settings > Roles & Permissions (Preservation Contract).
+ */
+async function roleHasPermissionForTenant(tenantId, role, permission) {
+  const normalizedRole = String(role || '').toLowerCase();
+  if (normalizedRole === 'admin') return true; // never overridable -- see comment above
+
+  if (tenantId !== undefined && tenantId !== null) {
+    try {
+      const override = await getRolePermissionModel()
+        .query()
+        .where({ tenant_id: tenantId, role: normalizedRole, permission })
+        .first();
+      if (override) return Boolean(override.enabled);
+    } catch {
+      // DB unavailable / table missing on an older, not-yet-migrated database -- fall back
+      // to the hardcoded default rather than failing every permission check tenant-wide.
+    }
+  }
+  return roleHasPermission(normalizedRole, permission);
+}
+
+module.exports = { PERMISSIONS, ROLE_PERMISSIONS, KNOWN_ROLES, roleHasPermission, roleHasPermissionForTenant };

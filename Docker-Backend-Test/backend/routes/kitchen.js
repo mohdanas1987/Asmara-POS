@@ -12,6 +12,7 @@ const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS } = require('../config/permissions');
 const KitchenStation = require('../models/KitchenStation');
 const KitchenTicket = require('../models/KitchenTicket');
+const { getHeldCourses, fireCourse } = require('../services/courseRouting');
 
 const TICKET_STATUSES = ['pending', 'preparing', 'ready', 'served'];
 
@@ -132,6 +133,49 @@ router.post('/tickets/:id/reprint', fetchuser, requirePermission(PERMISSIONS.KIT
             printed_at: null, // Electron side sees printed_at cleared and knows to print again
         });
         return res.json({ status: true, message: 'Ticket queued for reprint.' });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
+// --- Course firing (CTO forensic audit 2026-09-20, task "Courses") --------
+
+// What's currently held back from the kitchen for one order, grouped by course. Same
+// permission as viewing tickets -- any kitchen/waiter/manager role that can see the KDS can
+// see what's queued up behind it.
+router.get('/held-courses/:orderId', fetchuser, requirePermission(PERMISSIONS.KITCHEN_VIEW), async (req, res) => {
+    try {
+        const held = await getHeldCourses({ tenantId: req.body.tenant_id, orderId: req.params.orderId });
+        return res.json({ status: true, held });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
+// Fires one held course for one order -- moves it out of held_course_items and into real,
+// per-station kitchen_tickets rows via the same routeOrderToKitchen() every other order uses.
+// Gated on TABLES_MANAGE (a waiter/cashier decision made from the floor), not KITCHEN_VIEW
+// (kitchen staff don't decide when the next course fires).
+router.post('/fire-course', fetchuser, requirePermission(PERMISSIONS.TABLES_MANAGE), [
+    body('order_id').isLength({ min: 1 }),
+    body('course').isLength({ min: 1 }),
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ status: false, message: errors.array()[0].msg });
+        }
+        const { tickets, firedItemCount } = await fireCourse({
+            tenantId: req.body.tenant_id,
+            orderId: req.body.order_id,
+            course: req.body.course,
+        });
+        if (firedItemCount === 0) {
+            return res.json({ status: false, message: 'Nothing held for that course -- it may already be fired.' });
+        }
+        const io = req.app.get('io');
+        if (io && tickets.length > 0) io.emit('kitchen-ticket-created', { tickets });
+        return res.json({ status: true, message: `Fired ${firedItemCount} item(s) to the kitchen.`, tickets });
     } catch (e) {
         return res.status(500).json({ status: false, message: e.message });
     }

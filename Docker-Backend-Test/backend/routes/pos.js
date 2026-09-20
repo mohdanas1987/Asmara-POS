@@ -28,6 +28,7 @@ router.get('/items', fetchuser, async(req, res) => { // updated function
             'seq',
             'sold_by_weight',
             'weight_unit',
+            'course',
         ];
 
         if (req.body.category_id && req.body.category_id !== 'all') {

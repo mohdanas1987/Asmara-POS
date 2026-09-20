@@ -38,6 +38,7 @@ function createApp(knex) {
 
     app.use("/auth", require("./routes/auth"));
     app.use("/users", require("./routes/users"));
+    app.use("/roles", require("./routes/roles"));
     app.use("/kitchen", require("./routes/kitchen"));
     app.use("/loyalty", require("./routes/loyalty"));
     app.use("/modifiers", require("./routes/modifiers"));

@@ -14,6 +14,9 @@ export interface MenuItem {
   catName?: string;
   sold_by_weight?: boolean | number; // SQLite returns 0/1 -- callers should coerce with Boolean(...)
   weight_unit?: 'kg' | 'g' | 'lb';
+  // Course firing (CTO forensic audit 2026-09-20): unset/'starter' fires to the kitchen
+  // immediately; any other value is held at the POS until a waiter fires that course.
+  course?: 'starter' | 'main' | 'dessert' | 'other' | null;
 }
 
 // Menu modifiers & spice levels (task #40) -- see backend routes/modifiers.js.
@@ -56,6 +59,39 @@ export interface CartLine {
   note?: string;
   weight?: number; // present only for sold_by_weight items -- the reading (in item.weight_unit) this line was priced at
   lineKey?: string; // stable identity for setQty/removeItem -- multiple weighings of the same item are separate lines
+}
+
+// Course firing (CTO forensic audit 2026-09-20): what's currently held back from the
+// kitchen for one order, grouped by course -- see GET /kitchen/held-courses/:orderId.
+export interface HeldCourse {
+  course: string;
+  items: Array<{ id: number | string; quantity: number }>;
+}
+
+// Staff quick-login: PIN + QR badge (CTO forensic audit 2026-09-20).
+export interface StaffMember {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  type?: string;
+  status: boolean | number;
+  created_at?: string;
+  has_pin: boolean;
+  has_qr_badge: boolean;
+}
+
+// role_permissions as a real, editable table (CTO forensic audit 2026-09-20).
+export interface RolePermissionEntry {
+  permission: string;
+  enabled: boolean;
+  isOverride: boolean;
+  default: boolean;
+}
+
+export interface RolePermissionRow {
+  role: string;
+  permissions: RolePermissionEntry[];
 }
 
 export interface Table {

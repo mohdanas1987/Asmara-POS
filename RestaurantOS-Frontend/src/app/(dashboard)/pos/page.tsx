@@ -23,6 +23,7 @@ import { MenuItem } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
 import { publishCustomerDisplay } from '@/lib/customerDisplay';
 import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
+import { HeldCoursesBar } from './components/HeldCoursesBar';
 
 export default function PosPageWrapper() {
   // useSearchParams needs a Suspense boundary for the static parts of this route to still
@@ -52,6 +53,7 @@ function PosPage() {
   const [sendingToKitchen, setSendingToKitchen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [preloaded, setPreloaded] = useState(false);
+  const [heldCoursesRefresh, setHeldCoursesRefresh] = useState(0);
 
   // Resuming a table: pull in whatever's already on that order (sent to kitchen or not)
   // so re-opening a table shows what was already ordered, instead of an empty cart that
@@ -132,6 +134,9 @@ function PosPage() {
       const { quantities } = buildQuantities();
       await sendTableOrderToKitchen(table, orderId, quantities, cart.total);
       setLastResult(`Sent to kitchen for table #${table}.`);
+      // Course firing (CTO forensic audit 2026-09-20): a later course may now be sitting
+      // held rather than already on the kitchen display -- refresh the held-courses bar.
+      setHeldCoursesRefresh((n) => n + 1);
       // Best-effort -- a failed/missing printer must never block an order that already
       // reached the kitchen display digitally (see lib/printing.ts's fallback behavior).
       printKitchenTicket({ tableNumber: table, orderId, lines: cartLinesToTicketLines(cart.lines) });
@@ -229,6 +234,7 @@ function PosPage() {
       )}
 
       <section className="flex min-h-0 flex-col">
+        {isTableOrder && orderId && <HeldCoursesBar orderId={orderId} refreshKey={heldCoursesRefresh} />}
         {isTableOrder && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2">
             <div>

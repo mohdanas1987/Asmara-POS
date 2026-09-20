@@ -60,6 +60,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/settings/payments', label: 'Payments', icon: '💳', permission: PERMISSIONS.SETTINGS_MANAGE },
       { href: '/settings/tax', label: 'Tax Rates', icon: '🧮', permission: PERMISSIONS.SETTINGS_MANAGE },
       { href: '/settings/printers', label: 'Printers', icon: '🖨️', permission: PERMISSIONS.SETTINGS_MANAGE },
+      { href: '/settings/staff', label: 'Staff', icon: '🧑\u200d🍳', permission: PERMISSIONS.STAFF_VIEW },
+      { href: '/settings/roles', label: 'Roles & Permissions', icon: '🔐', permission: PERMISSIONS.SETTINGS_MANAGE },
     ],
   },
 ];
