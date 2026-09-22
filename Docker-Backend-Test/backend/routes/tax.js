@@ -4,6 +4,11 @@ const Tax = require('../models/Tax');
 const router = express.Router();
 
 const fetchuser= require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// tax rates are tenant-wide financial configuration -- gated behind SETTINGS_MANAGE, same as
+// every other tenant-config route.
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 
 let error = { status : false, message:'Something went wrong!' }
 
@@ -31,7 +36,7 @@ router.get('/list', fetchuser, async (req,res) => {
 });
 
 // Route 3 : Get logged in user details - login required
-router.post('/create', fetchuser, async(req, res) =>{
+router.post('/create', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async(req, res) =>{
     try {
 
         const tax = await Tax.query().insert({
@@ -50,7 +55,7 @@ router.post('/create', fetchuser, async(req, res) =>{
     }
 });
 
-router.post('/update', fetchuser, async(req, res) =>{
+router.post('/update', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async(req, res) =>{
     try {
 
         const tax = await Tax.query().patchAndFetchById(req.body.id, {
@@ -102,6 +107,6 @@ async function toggleTaxHandler(req, res) {
     }
 }
 router.get('/toggle/:id/:status', fetchuser, toggleTaxHandler);
-router.patch('/toggle/:id/:status', fetchuser, toggleTaxHandler);
+router.patch('/toggle/:id/:status', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), toggleTaxHandler);
 
 module.exports=router

@@ -87,7 +87,7 @@ async function getLedger({ tenantId, orderId }) {
  * (net of any prior refunds) -- the one invariant that matters here: the ledger can never
  * show the customer refunded more money than they ever paid.
  */
-async function refund({ tenantId, orderId, amount, reason, createdBy }) {
+async function refund({ tenantId, orderId, amount, reason, createdBy, method }) {
   const amountNum = Number(amount);
   if (!(amountNum > 0)) {
     throw new Error('Refund amount must be greater than zero.');
@@ -96,11 +96,18 @@ async function refund({ tenantId, orderId, amount, reason, createdBy }) {
   if (toCents(amountNum) > toCents(netPaid) + ROUNDING_TOLERANCE_CENTS) {
     throw new Error(`Cannot refund €${amountNum.toFixed(2)}: only €${netPaid.toFixed(2)} has actually been paid on this order.`);
   }
+  // Cash-register accounting fix (CTO forensic audit 2026-09-21): a refund needs to record
+  // WHICH method the money is actually being handed back through, so the caller (routes/
+  // orders.js) can correctly debit the cash drawer only for a cash refund -- a card refund
+  // never touches the physical drawer at all. Defaults to the generic 'refund' method (the
+  // original, pre-fix behavior) when the caller doesn't specify one, so any existing caller
+  // that predates this fix keeps working exactly as before, just without a cash-drawer
+  // adjustment (matching its old behavior, which never touched the drawer either).
   return PaymentTransaction.query().insert({
     tenant_id: tenantId,
     order_id: String(orderId),
     type: 'refund',
-    method: 'refund',
+    method: method || 'refund',
     amount: amountNum.toFixed(2),
     status: 'succeeded',
     note: reason ?? null,

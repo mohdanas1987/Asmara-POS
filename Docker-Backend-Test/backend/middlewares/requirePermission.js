@@ -20,7 +20,7 @@
 const { roleHasPermissionForTenant } = require('../config/permissions');
 
 function requirePermission(permission) {
-  return async (req, res, next) => {
+  const middleware = async (req, res, next) => {
     const role = req.authRole;
     try {
       const allowed = await roleHasPermissionForTenant(req.body.tenant_id, role, permission);
@@ -35,6 +35,12 @@ function requirePermission(permission) {
       return res.status(500).json({ status: false, message: e.message });
     }
   };
+  // RBAC audit tooling (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"): tag the
+  // returned closure with the permission it enforces so test/rbac-audit.test.js can walk every
+  // registered route's real middleware stack at runtime and know, without guessing from
+  // function names, exactly which routes are (and are not) permission-gated and with what.
+  middleware.__requiresPermission = permission;
+  return middleware;
 }
 
 module.exports = requirePermission;

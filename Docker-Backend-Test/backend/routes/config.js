@@ -4,6 +4,12 @@ const Setting = require('../models/Setting');
 const Notification = require('../models/Notification');
 const router = express.Router();
 const fetchuser = require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// tenant-wide report scheduling was previously gated only by fetchuser (any authenticated
+// staff, not just management, could enable/disable or reschedule the whole tenant's daily
+// report job). Gated behind SETTINGS_MANAGE, same as every other tenant-wide config route.
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 const { uploadFile, getCurrentDate, runScheduledJobs } = require("../utils");
 const Queue = require("../models/Queue");
 const { REPORT_KEY_NAME } = require("../utils/constants");
@@ -180,11 +186,11 @@ async function dailyReportsToggleHandler(req, res) {
         status: true
     });
 }
-router.get('/daily-reports/:status', fetchuser, dailyReportsToggleHandler);
-router.patch('/daily-reports/:status', fetchuser, dailyReportsToggleHandler);
+router.get('/daily-reports/:status', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), dailyReportsToggleHandler);
+router.patch('/daily-reports/:status', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), dailyReportsToggleHandler);
 
 // STAGE 2 / phase 18: was unauthenticated — changes the scheduled time of the daily report job.
-router.post('/daily-reports-time', fetchuser, async( req, res )=> {
+router.post('/daily-reports-time', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async( req, res )=> {
 
     await Queue.query().where('tenant_id', req.body.tenant_id).where('name', REPORT_KEY_NAME).update({
         scheduled_time: req.body.time

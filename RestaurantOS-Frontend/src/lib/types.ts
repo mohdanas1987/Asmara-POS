@@ -148,6 +148,8 @@ export interface TableRow {
   // Table/Floor management redesign (project audit 2026-09-15).
   capacity?: number | null;
   section?: string | null;
+  // Seat / server assignment (CTO forensic audit 2026-09-21, P1).
+  assigned_server_id?: number | null;
 }
 
 export interface OrderRow {

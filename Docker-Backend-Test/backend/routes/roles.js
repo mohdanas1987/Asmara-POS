@@ -13,6 +13,7 @@ const fetchuser = require('../middlewares/loggedIn');
 const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS, ROLE_PERMISSIONS, KNOWN_ROLES, roleHasPermission } = require('../config/permissions');
 const RolePermission = require('../models/RolePermission');
+const auditLog = require('../services/auditLog');
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 // admin is intentionally excluded -- its wildcard access is never editable (see
@@ -69,6 +70,16 @@ router.patch('/permissions', fetchuser, requirePermission(PERMISSIONS.SETTINGS_M
             await RolePermission.query().insert({ tenant_id: tenantId, role, permission, enabled });
         }
 
+        auditLog.record({
+            tenantId,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'role_permission.change',
+            entityType: 'role',
+            entityId: role,
+            payload: { permission, enabled },
+        });
+
         return res.json({ status: true, message: `${role} ${enabled ? 'granted' : 'denied'} '${permission}'.` });
     } catch (e) {
         return res.status(500).json({ status: false, message: e.message });
@@ -88,6 +99,17 @@ router.delete('/permissions', fetchuser, requirePermission(PERMISSIONS.SETTINGS_
         await RolePermission.forTenant(req.body.tenant_id)
             .where({ role: req.body.role, permission: req.body.permission })
             .delete();
+
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'role_permission.revert',
+            entityType: 'role',
+            entityId: req.body.role,
+            payload: { permission: req.body.permission },
+        });
+
         return res.json({ status: true, message: 'Reverted to default.' });
     } catch (e) {
         return res.status(500).json({ status: false, message: e.message });

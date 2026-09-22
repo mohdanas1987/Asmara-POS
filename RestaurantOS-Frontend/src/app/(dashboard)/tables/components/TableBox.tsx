@@ -25,6 +25,8 @@ export function TableBox({
   onMove,
   onClick,
   onTransferClick,
+  onAssignServerClick,
+  serverName,
   selected,
   selectionMode,
   busy,
@@ -34,6 +36,11 @@ export function TableBox({
   onMove: (x: number, y: number) => void;
   onClick: () => void;
   onTransferClick?: () => void;
+  // Seat / server assignment (CTO forensic audit 2026-09-21, P1): who's serving this table
+  // right now. Both optional so callers that don't care (e.g. a future read-only floor
+  // view) don't need to wire anything.
+  onAssignServerClick?: () => void;
+  serverName?: string | null;
   selected: boolean;
   selectionMode?: boolean; // true while picking tables to merge/free-selected
   busy?: boolean;
@@ -103,6 +110,26 @@ export function TableBox({
           {order.total != null && `€${Number(order.total).toFixed(2)}`}
           {elapsedMinutes != null && ` · ${elapsedMinutes}m`}
         </span>
+      )}
+
+      {serverName && (
+        <span className="text-[9px] font-normal italic opacity-70">👤 {serverName}</span>
+      )}
+
+      {onAssignServerClick && !selectionMode && (
+        <button
+          type="button"
+          title={serverName ? `Serving: ${serverName} (tap to change)` : 'Assign a server to this table'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAssignServerClick();
+          }}
+          className="touch-target absolute -left-3 -top-3 flex h-7 w-7 items-center justify-center rounded-full border border-border bg-surface text-xs shadow-sm hover:border-brand hover:text-brand"
+        >
+          {serverName ? '🧑\u200d🍳' : '👤'}
+        </button>
       )}
 
       {onTransferClick && !selectionMode && (

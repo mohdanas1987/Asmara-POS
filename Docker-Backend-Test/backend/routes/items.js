@@ -10,6 +10,13 @@ const path = require('path');
 const router = express.Router();
 const fs = require('fs');
 const fetchuser = require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// creating/editing/importing/converting products and adjusting stock previously required only
+// fetchuser -- any logged-in role (including kitchen) could restructure the menu or zero out
+// inventory. Gated behind MENU_MANAGE, same permission menu categories and modifier groups
+// already use.
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 const upload = require('../middlewares/multer');
 const { uploadToServer, queueProduct } = require("../utils");
 const { calculateInclusiveTax } = require('../utils/tax');
@@ -83,7 +90,7 @@ router.get('/', fetchuser, async (req,res) => { // updated function
 });
 
 // STAGE 2 / phase 18: was unauthenticated — any request could change any product's stock count.
-router.post(`/updateStock/:id`, fetchuser, async (req, res)=> {
+router.post(`/updateStock/:id`, fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), async (req, res)=> {
     try {
         const updated =  await Product.query().patchAndFetchById(req.params.id, {
             quantity: req.body.quantity
@@ -96,7 +103,7 @@ router.post(`/updateStock/:id`, fetchuser, async (req, res)=> {
 });
 
 // Route 3 : Get logged in user details - login required
-router.post('/create', [upload.single('image'), fetchuser ], async(req, res) => {  // updated function
+router.post('/create', [upload.single('image'), fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE) ], async(req, res) => {  // updated function
     try
     {
 
@@ -186,7 +193,7 @@ router.post('/create', [upload.single('image'), fetchuser ], async(req, res) => 
 
 });
 
-router.post('/import', [ upload.single('file'), fetchuser ], async(req, res) => { // updated function
+router.post('/import', [ upload.single('file'), fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE) ], async(req, res) => { // updated function
     try
     {
         const workbook = XLSX.readFile(req.file.path);
@@ -259,7 +266,7 @@ router.post('/import', [ upload.single('file'), fetchuser ], async(req, res) => 
 
 });
 
-router.post('/update', [upload.single('uploaded'),fetchuser], async(req, res) =>{ // updated function
+router.post('/update', [upload.single('uploaded'),fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE)], async(req, res) =>{ // updated function
     try {
         const included = /^(?:Fresh|Topop Voucher|Habesha|Vegetables|Vegetable|Green Vegetables|Paneer|Fruits)$/i;
         if(!included.test(req.body.catName) && !req.body.code)
@@ -447,7 +454,7 @@ async function updateProductPosHandler(req, res) {
     }
 }
 router.get(`/update-product-pos/:id/:status`, fetchuser, updateProductPosHandler);
-router.patch(`/update-product-pos/:id/:status`, fetchuser, updateProductPosHandler);
+router.patch(`/update-product-pos/:id/:status`, fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), updateProductPosHandler);
 
 
 // STAGE 2b / phase 26 (Phase 1 local-dev pass, real functional-bug fix): this handler was
@@ -464,7 +471,7 @@ router.patch(`/update-product-pos/:id/:status`, fetchuser, updateProductPosHandl
 // previously depended on the process's current working directory rather than the app's own
 // location -- and the target directory is created if it doesn't exist yet, since nothing
 // else in this codebase appears to create `tmp/converted` ahead of time.
-router.post('/convert', fetchuser, async (req, res) => {
+router.post('/convert', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), async (req, res) => {
     try {
         const response = await axios({
             method: 'get',
@@ -496,7 +503,7 @@ router.post('/convert', fetchuser, async (req, res) => {
     }
 });
 
-router.post(`/create-custom`, [upload.single('image'),fetchuser], async(req,res) => {
+router.post(`/create-custom`, [upload.single('image'),fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE)], async(req,res) => {
     try
     {
         const payload = {

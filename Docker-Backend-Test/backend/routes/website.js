@@ -12,6 +12,13 @@ const crypto = require('crypto');
 const router = express.Router();
 
 const fetchuser = require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// connecting/disconnecting the public website integration is tenant-wide config -- gated
+// behind SETTINGS_MANAGE, same as every other integration route. POST /orders is unaffected
+// (it's the public-facing webhook, correctly gated by its own websiteApiKey middleware
+// instead, not tenant-staff RBAC).
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 const websiteApiKey = require('../middlewares/websiteApiKey');
 const WebsiteConnection = require('../models/WebsiteConnection');
 const MenuCategory = require('../models/MenuCategory');
@@ -39,7 +46,7 @@ router.get('/status', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/connect', fetchuser, async (req, res) => {
+router.post('/connect', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async (req, res) => {
     try {
         if (!req.body.website_url) {
             return res.status(400).json({ status: false, message: 'website_url is required.' });
@@ -68,7 +75,7 @@ router.post('/connect', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/disconnect', fetchuser, async (req, res) => {
+router.post('/disconnect', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async (req, res) => {
     try {
         await WebsiteConnection.query().where('tenant_id', req.body.tenant_id).patch({ connected: false });
         return res.json({ status: true, message: 'Website disconnected. Online orders are now disabled.' });

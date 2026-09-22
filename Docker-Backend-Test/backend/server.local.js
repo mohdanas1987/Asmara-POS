@@ -51,6 +51,7 @@ function createApp(knex) {
     app.use("/pos", require("./routes/pos"));
     app.use("/tax", require("./routes/tax"));
     app.use("/config", require("./routes/config"));
+    app.use("/audit", require("./routes/audit"));
     app.use("/website", require("./routes/website"));
     app.use("/payments", require("./routes/payments"));
     app.use("/superadmin", require("./routes/superadmin"));

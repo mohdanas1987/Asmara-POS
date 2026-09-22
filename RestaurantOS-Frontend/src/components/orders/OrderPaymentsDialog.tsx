@@ -7,7 +7,7 @@
  * PAYMENTS_REFUND permission the backend already enforces -- this dialog just doesn't render
  * the button for anyone else; the backend rejects the request either way).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dialog } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
@@ -31,8 +31,13 @@ export function OrderPaymentsDialog({ orderId, onClose }: OrderPaymentsDialogPro
   const [transactions, setTransactions] = useState<PaymentTransaction[]>([]);
   const [netPaid, setNetPaid] = useState(0);
   const [refundAmount, setRefundAmount] = useState('');
+  const [refundMethod, setRefundMethod] = useState<'cash' | 'card'>('card');
   const [refundReason, setRefundReason] = useState('');
   const [busyId, setBusyId] = useState<string | number | null>(null);
+  // Payment idempotency (CTO forensic audit 2026-09-21): one key per refund attempt, reused
+  // across retries of the same attempt -- same pattern as the POS checkout screen's charge
+  // flow (see pos/page.tsx).
+  const refundIdempotencyKeyRef = useRef<string | null>(null);
 
   const canRefund = roleHasPermission(getCurrentRole(), PERMISSIONS.PAYMENTS_REFUND);
 
@@ -55,6 +60,7 @@ export function OrderPaymentsDialog({ orderId, onClose }: OrderPaymentsDialogPro
     if (orderId) {
       setRefundAmount('');
       setRefundReason('');
+      refundIdempotencyKeyRef.current = null;
       load(orderId);
     }
   }, [orderId]);
@@ -66,13 +72,18 @@ export function OrderPaymentsDialog({ orderId, onClose }: OrderPaymentsDialogPro
       showToast('Enter a valid refund amount.', 'error');
       return;
     }
+    if (!refundIdempotencyKeyRef.current) {
+      refundIdempotencyKeyRef.current =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `refund-${Date.now()}-${Math.random()}`;
+    }
     setBusyId('refund');
     try {
-      const res = await refundOrder(orderId, amount, refundReason || undefined);
+      const res = await refundOrder(orderId, amount, refundMethod, refundReason || undefined, refundIdempotencyKeyRef.current);
       if (res.status) {
         showToast('Refund recorded.', 'success');
         setRefundAmount('');
         setRefundReason('');
+        refundIdempotencyKeyRef.current = null;
         await load(orderId);
       } else {
         showToast(res.message || 'Refund failed.', 'error');
@@ -155,7 +166,7 @@ export function OrderPaymentsDialog({ orderId, onClose }: OrderPaymentsDialogPro
           {canRefund && netPaid > 0 && (
             <div className="flex flex-col gap-2 border-t border-border pt-3">
               <div className="text-sm font-medium text-ink">Issue a refund</div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <input
                   type="number"
                   min="0"
@@ -165,6 +176,17 @@ export function OrderPaymentsDialog({ orderId, onClose }: OrderPaymentsDialogPro
                   onChange={(e) => setRefundAmount(e.target.value)}
                   className="w-28 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
                 />
+                {/* Cash-register accounting fix (CTO forensic audit 2026-09-21): the drawer
+                    must only move for a CASH refund -- this choice is what tells the backend
+                    whether to debit it (see refundOrder in lib/api.ts). */}
+                <select
+                  value={refundMethod}
+                  onChange={(e) => setRefundMethod(e.target.value as 'cash' | 'card')}
+                  className="rounded-lg border border-border bg-surface px-2 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                >
+                  <option value="card">Card / other</option>
+                  <option value="cash">Cash (adjusts drawer)</option>
+                </select>
                 <input
                   type="text"
                   placeholder="Reason (optional)"

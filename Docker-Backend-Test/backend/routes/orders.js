@@ -14,40 +14,68 @@ const { nonKitchenItems } = require("../utils/constants");
 const { routeOrderToKitchen } = require('../services/kitchenRouting');
 const { sendItemsRespectingCourses } = require('../services/courseRouting');
 
-// Modifiers on kitchen tickets (CTO forensic audit 2026-09-20, "Gate 1: Order domain
-// completion"): best-effort enrichment of the flat product-id/quantity routedItems array
-// with a modifier-name summary, sourced from the POS's own `data.lines` detail (see
-// lib/api.ts's OrderLineDetail / sendTableOrderToKitchen on the frontend). Deliberately NOT
-// a rewrite of the underlying per-product-id diff routing -- that stays completely
-// untouched, matching every other item's shape exactly as before this feature -- this only
-// ever ADDS a `modifiers` key, and only to the items that actually have a selection.
-// KNOWN LIMITATION (documented rather than silently papered over): if the same product
-// appears as two separate cart lines with two DIFFERENT modifier selections, the flat
-// per-product-id routing has already summed them into one quantity by this point, so only
-// one line's modifier set can be shown against that combined quantity. Correctly
-// representing that case would require rewriting kitchen routing to work per-line instead
-// of per-product-id -- a much larger change than this follow-up, and out of scope here.
-function attachModifierSummaries(routedItems, dataLines) {
-    if (!Array.isArray(dataLines) || dataLines.length === 0) return routedItems;
-    const namesByItemId = new Map();
-    dataLines.forEach((line) => {
-        if (line && line.itemId !== undefined && Array.isArray(line.modifiers) && line.modifiers.length > 0) {
-            const names = line.modifiers.map((m) => m && m.name).filter(Boolean);
-            if (names.length > 0) namesByItemId.set(String(line.itemId), names);
+// Per-line modifier kitchen routing (CTO forensic audit 2026-09-21, fixing the KNOWN
+// LIMITATION this same file used to document here: two cart lines of the same product with
+// DIFFERENT modifier selections -- "Burger + Cheese" and "Burger + No Cheese" -- used to
+// collapse into one aggregated `updatedQt[productId]` quantity by the time routing saw them,
+// so only ONE line's modifier set could ever be shown against the combined quantity. That is
+// not production-safe for a kitchen that needs to know exactly which plate gets which
+// preparation.
+//
+// Fix: pull every line that actually carries a modifier selection OUT of the flat
+// product-id/quantity map entirely (subtracting its quantity back out of that map) and route
+// it as its own separate ticket entry instead, grouped by (item id + exact modifier
+// signature) so two lines with the IDENTICAL selection still merge into one entry -- matching
+// the cart's own merge behavior (see useCart.ts) -- while two DIFFERENT selections never do.
+// Plain items with no modifier line at all are completely unaffected: they stay in the flat
+// map and produce the exact same {id, quantity} shape as before this fix, so every existing
+// no-modifier order and test is untouched (Preservation Contract).
+function buildRoutedItems(updatedQt, dataLines) {
+    const qtyMap = { ...updatedQt };
+    const modifierLines = Array.isArray(dataLines)
+        ? dataLines.filter((l) => l && l.itemId !== undefined && Array.isArray(l.modifiers) && l.modifiers.length > 0)
+        : [];
+
+    if (modifierLines.length === 0) {
+        return Object.entries(qtyMap).map(([id, quantity]) => ({ id, quantity }));
+    }
+
+    const grouped = new Map(); // "itemId::modifierSignature" -> { id, quantity, modifiers }
+    for (const line of modifierLines) {
+        const id = String(line.itemId);
+        const qty = Number(line.qty) || 0;
+        if (qty <= 0) continue;
+
+        // Remove this line's quantity from the flat map so it isn't ALSO counted there --
+        // the flat map and these per-line entries must never double-count the same items.
+        if (qtyMap[id] !== undefined) {
+            const remaining = Number(qtyMap[id]) - qty;
+            if (remaining > 0) qtyMap[id] = remaining;
+            else delete qtyMap[id];
         }
-    });
-    if (namesByItemId.size === 0) return routedItems;
-    return routedItems.map((item) => {
-        const names = namesByItemId.get(String(item.id));
-        return names ? { ...item, modifiers: names } : item;
-    });
+
+        const signature = line.modifiers.map((m) => m.id).sort((a, b) => a - b).join(',');
+        const key = `${id}::${signature}`;
+        const names = line.modifiers.map((m) => m && m.name).filter(Boolean);
+        if (grouped.has(key)) {
+            grouped.get(key).quantity += qty;
+        } else {
+            grouped.set(key, { id, quantity: qty, modifiers: names });
+        }
+    }
+
+    const plainItems = Object.entries(qtyMap).map(([id, quantity]) => ({ id, quantity }));
+    return [...plainItems, ...grouped.values()];
 }
 const loyalty = require('../services/loyaltyService');
 const { recordChange } = require('../services/offline/syncLog');
 const { calculateInclusiveTax } = require('../utils/tax');
 const paymentLedger = require('../services/payments/paymentLedger');
 const requirePermission = require('../middlewares/requirePermission');
+const idempotent = require('../middlewares/idempotent');
 const { PERMISSIONS } = require('../config/permissions');
+const { validateAndPriceLines, ModifierValidationError } = require('../services/modifierValidation');
+const auditLog = require('../services/auditLog');
 
 // Billing & payments completeness (task #37): both /create and /payment-update accept a
 // `modes` object shaped like { cash: 12.50 } or { card: 12.50 }, or (for the app's existing,
@@ -157,6 +185,20 @@ async function cancelOrderHandler(req, res) {
             status: "free"
         });
 
+        // Audit event log (CTO forensic audit 2026-09-21, P1 "Complete audit-event
+        // coverage"): a voided order is exactly the kind of sensitive, irreversible action a
+        // restaurant owner reviewing a shift needs a real record of -- who voided what, and
+        // when. Best-effort, after the void has already succeeded.
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'order.void',
+            entityType: 'order',
+            entityId: req.params.order,
+            payload: { table: req.params.table, deleted },
+        });
+
         return res.json({
             status: true,
             message: "Order cancelled!",
@@ -170,8 +212,13 @@ async function cancelOrderHandler(req, res) {
         });
     }
 }
-router.get('/cancel/:order/:table', fetchuser, cancelOrderHandler);
-router.post('/cancel/:order/:table', fetchuser, cancelOrderHandler);
+// RBAC enforcement fix (CTO forensic audit 2026-09-21, "one especially important security
+// issue remains" -- ORDERS_VOID exists in the permission matrix but this route only ever
+// checked authentication, not authorization, so a role with orders.void explicitly disabled
+// could still reach it. Discovered by Claude's own earlier test suite (see the comment in
+// test/role-permissions.test.js), now actually closed rather than just documented.
+router.get('/cancel/:order/:table', fetchuser, requirePermission(PERMISSIONS.ORDERS_VOID), cancelOrderHandler);
+router.post('/cancel/:order/:table', fetchuser, requirePermission(PERMISSIONS.ORDERS_VOID), cancelOrderHandler);
 
 // STAGE 2 / phase 18 + 19: same treatment as cancel above — was unauthenticated, was GET.
 async function finishOrderHandler(req, res) {
@@ -219,8 +266,8 @@ async function finishOrderHandler(req, res) {
         });
     }
 }
-router.get('/finish/:order/:table', fetchuser, finishOrderHandler);
-router.post('/finish/:order/:table', fetchuser, finishOrderHandler);
+router.get('/finish/:order/:table', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), finishOrderHandler);
+router.post('/finish/:order/:table', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), finishOrderHandler);
 
 // --- Kitchen Display support (new) ---
 // Both are deliberately separate, minimal routes rather than reusing /to-kitchen or /finish:
@@ -268,7 +315,7 @@ async function acceptOrderHandler(req, res) {
         return res.json({ status: false, message: error.message });
     }
 }
-router.post('/accept/:order', fetchuser, acceptOrderHandler);
+router.post('/accept/:order', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), acceptOrderHandler);
 
 async function markPreparedHandler(req, res) {
     try {
@@ -290,9 +337,9 @@ async function markPreparedHandler(req, res) {
         return res.json({ status: false, message: error.message });
     }
 }
-router.post('/prepared/:order', fetchuser, markPreparedHandler);
+router.post('/prepared/:order', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), markPreparedHandler);
 
-router.post('/create', fetchuser, async (req, res) => {
+router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), idempotent('orders.create'), async (req, res) => {
     try {
         let lastSession = await CashRegister.query().where('tenant_id', req.body.tenant_id).where('status', true).select('id').first().orderBy('id', 'DESC');
         if (lastSession) {
@@ -354,9 +401,23 @@ router.post('/create', fetchuser, async (req, res) => {
         order = await Order.query().patchAndFetchById(order.id, { payment_status: derivedStatus }).where('tenant_id', req.body.tenant_id);
 
         if (req.body.data) {
-            await CashRegister.query().findById(lastSession).where('tenant_id', req.body.tenant_id).patch({
-                closing_cash: CashRegister.raw(`closing_cash + ?`, [order.total]),
-            });
+            // Cash-register accounting fix (CTO forensic audit 2026-09-21, "serious
+            // cash-register accounting issue"): this used to credit the drawer with
+            // `order.total` regardless of HOW the order was actually paid -- a split
+            // cash/card payment (e.g. total EUR100, EUR40 cash + EUR60 card) was crediting
+            // the drawer the FULL EUR100 instead of the EUR40 actually put in it, and a
+            // card-only payment was still (wrongly) crediting cash. The drawer must only
+            // ever move by real cash actually collected, which is exactly what `charges`
+            // (built above from either the itemized `charges` array or `modes`) records --
+            // summing just its 'cash' entries is the one number that's ever correct here.
+            const cashCollected = charges
+                .filter((c) => c.method === 'cash')
+                .reduce((sum, c) => sum + c.amount, 0);
+            if (cashCollected > 0 && lastSession) {
+                await CashRegister.query().findById(lastSession).where('tenant_id', req.body.tenant_id).patch({
+                    closing_cash: CashRegister.raw(`closing_cash + ?`, [cashCollected]),
+                });
+            }
 
             return res.status(200).json({
                 status: true,
@@ -416,7 +477,7 @@ async function linkTablesHandler(req, res) {
     }
 }
 router.get('/link/:tables', fetchuser, linkTablesHandler);
-router.post('/link/:tables', fetchuser, linkTablesHandler);
+router.post('/link/:tables', fetchuser, requirePermission(PERMISSIONS.TABLES_MANAGE), linkTablesHandler);
 
 router.get('/init/:table', fetchuser, async (req, res) => {
     try {
@@ -467,11 +528,23 @@ router.get('/init/:table', fetchuser, async (req, res) => {
 })
 
 // STAGE 2 / phase 18: was unauthenticated (verb was already correct — POST).
-router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
+router.post('/to-kitchen/:table?', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), idempotent('orders.to-kitchen'), async (req, res) => {
     try {
         let payload = { status: 'in-kitchen' }
 
         if (req.body.data) {
+            // Server-side modifier validation (CTO forensic audit 2026-09-21, "Modifier
+            // authorization/validation is client-heavy"): re-derive every submitted line's
+            // modifiers from the database BEFORE anything gets persisted or routed to the
+            // kitchen -- see services/modifierValidation.js. Throws ModifierValidationError
+            // (caught below) on a tampered/invalid selection; a request with no `lines` at
+            // all (or an empty array) is completely untouched, same as before this existed.
+            if (Array.isArray(req.body.data.lines) && req.body.data.lines.length > 0) {
+                req.body.data.lines = await validateAndPriceLines({
+                    tenantId: req.body.tenant_id,
+                    lines: req.body.data.lines,
+                });
+            }
             payload = {
                 ...payload,
                 data: JSON.stringify(req.body.data),
@@ -563,8 +636,7 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
             // old tenant that predates migration 0009) must never stop the order from
             // reaching the kitchen the way it always has.
             try {
-                let routedItems = Object.entries(updatedQt).map(([id, quantity]) => ({ id, quantity }));
-                routedItems = attachModifierSummaries(routedItems, req.body.data && req.body.data.lines);
+                let routedItems = buildRoutedItems(updatedQt, req.body.data && req.body.data.lines);
                 if (routedItems.length > 0) {
                     // Course firing (CTO forensic audit 2026-09-20): see the identical comment
                     // in acceptOrderHandler above -- same hold/fire behavior, same Preservation
@@ -591,11 +663,19 @@ router.post('/to-kitchen/:table?', fetchuser, async (req, res) => {
 
     } catch (error) {
         console.log(error.message)
+        // Server-side modifier validation (CTO forensic audit 2026-09-21): a validation
+        // failure needs to actually reach the caller as a real error the POS can show the
+        // cashier -- not swallowed into the same silent `{status:false}` every other
+        // exception in this handler falls back to (a pre-existing, deliberately unchanged
+        // behavior for anything else that goes wrong here).
+        if (error instanceof ModifierValidationError) {
+            return res.status(error.statusCode || 400).json({ status: false, message: error.message });
+        }
         return res.json({ status: false })
     }
 })
 
-router.post('/payment-update', fetchuser, async (req, res) => {
+router.post('/payment-update', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), idempotent('orders.payment-update'), async (req, res) => {
     try {
 
         let modes = req.body.modes;
@@ -634,6 +714,24 @@ router.post('/payment-update', fetchuser, async (req, res) => {
             data: modes
         }).where('tenant_id', req.body.tenant_id);
 
+        // Cash-register accounting fix (CTO forensic audit 2026-09-21, "serious cash-register
+        // accounting issue"): this route records charges into the same payment ledger /create
+        // does but, before this fix, never touched the drawer at all -- a payment recorded
+        // here (e.g. finishing a partially-paid order) was invisible to the cash-register
+        // report. Same rule as /create: only the actual 'cash' portion of `charges` moves the
+        // drawer, and only if a register session is currently open.
+        const cashCollected = charges
+            .filter((c) => c.method === 'cash')
+            .reduce((sum, c) => sum + c.amount, 0);
+        if (cashCollected > 0) {
+            let lastSession = await CashRegister.query().where('tenant_id', req.body.tenant_id).where('status', true).select('id').first().orderBy('id', 'DESC');
+            if (lastSession) {
+                await CashRegister.query().findById(lastSession.id).where('tenant_id', req.body.tenant_id).patch({
+                    closing_cash: CashRegister.raw(`closing_cash + ?`, [cashCollected]),
+                });
+            }
+        }
+
         return res.json({
             status: true,
             message: "Payment completed!",
@@ -659,15 +757,16 @@ router.get('/:order/payments', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/:order/refund', fetchuser, requirePermission(PERMISSIONS.PAYMENTS_REFUND), async (req, res) => {
+router.post('/:order/refund', fetchuser, requirePermission(PERMISSIONS.PAYMENTS_REFUND), idempotent('orders.refund'), async (req, res) => {
     try {
-        const { amount, reason } = req.body;
+        const { amount, reason, method } = req.body;
         const transaction = await paymentLedger.refund({
             tenantId: req.body.tenant_id,
             orderId: req.params.order,
             amount,
             reason,
             createdBy: req.body.myID,
+            method,
         });
         const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: req.params.order });
         const order = await Order.query().where('tenant_id', req.body.tenant_id).findById(req.params.order);
@@ -678,6 +777,36 @@ router.post('/:order/refund', fetchuser, requirePermission(PERMISSIONS.PAYMENTS_
                 payment_status: netPaid <= 0 ? 'refunded' : derivedStatus,
             }).where('tenant_id', req.body.tenant_id);
         }
+
+        // Cash-register accounting fix (CTO forensic audit 2026-09-21): only a CASH refund
+        // ever touches the physical drawer -- a card refund is reversed by the payment
+        // provider, never by taking money back out of the till. Best-effort (like every other
+        // sync/logging side-effect in this file): a missing open register session must never
+        // block a refund that's otherwise valid.
+        if (method === 'cash' && Number(amount) > 0) {
+            const openSession = await CashRegister.query().where('tenant_id', req.body.tenant_id).where('status', true).orderBy('id', 'DESC').select('id').first();
+            if (openSession) {
+                await CashRegister.query().findById(openSession.id).where('tenant_id', req.body.tenant_id).patch({
+                    closing_cash: CashRegister.raw(`closing_cash - ?`, [Number(amount)]),
+                });
+            } else {
+                console.log('[cash-register] non-fatal: cash refund recorded with no open register session -- drawer not adjusted.');
+            }
+        }
+
+        // Audit event log (CTO forensic audit 2026-09-21, P1 "Complete audit-event
+        // coverage"): a refund is one of the most sensitive actions in the app -- real money
+        // moving back out. Best-effort, after the refund has already been recorded.
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'payment.refund',
+            entityType: 'order',
+            entityId: req.params.order,
+            payload: { amount, method, reason, netPaid },
+        });
+
         return res.json({ status: true, message: 'Refund recorded.', transaction, netPaid, order: updatedOrder });
     } catch (error) {
         return res.status(400).json({ status: false, message: error.message });
@@ -691,6 +820,17 @@ router.post('/payments/:transactionId/void', fetchuser, requirePermission(PERMIS
             transactionId: req.params.transactionId,
             createdBy: req.body.myID,
         });
+
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'payment.void',
+            entityType: 'payment_transaction',
+            entityId: req.params.transactionId,
+            payload: { voided: voidRow },
+        });
+
         return res.json({ status: true, message: 'Transaction voided.', transaction: voidRow });
     } catch (error) {
         return res.status(400).json({ status: false, message: error.message });
@@ -839,6 +979,13 @@ router.get(`/last-order`, fetchuser, async (req, res) => {
 
 })
 
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21): X/Z register reports are a
+// core cashier/waiter end-of-shift duty (checking or closing out their own drawer), not a
+// management-only "view reports" action -- there is no dedicated register-reports permission
+// in the model, and gating these behind REPORTS_VIEW (admin/manager only, per
+// config/permissions.js) would lock cashiers and waiters out of closing their own till, a
+// real regression. Deliberately left open to any authenticated staff member; see
+// test/rbac-audit.test.js's allowlist for the same reasoning, kept in one place.
 router.post(`/x-report`, fetchuser, async (req, res) => {
     try {
 
@@ -932,6 +1079,6 @@ async function removeReportHandler(req, res) {
     }
 }
 router.get('/remove-report/:id', fetchuser, removeReportHandler);
-router.delete('/remove-report/:id', fetchuser, removeReportHandler);
+router.delete('/remove-report/:id', fetchuser, requirePermission(PERMISSIONS.REPORTS_VIEW), removeReportHandler);
 
 module.exports=router

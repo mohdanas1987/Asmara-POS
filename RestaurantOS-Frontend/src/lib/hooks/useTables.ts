@@ -1,21 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { getTables, updateTablePosition, transferTable, freeAllTables, freeSelectedTables, mergeTables, splitTable, getOrders, initTableOrder } from '@/lib/api';
+import { getTables, updateTablePosition, transferTable, assignTableServer, freeAllTables, freeSelectedTables, mergeTables, splitTable, getOrders, initTableOrder } from '@/lib/api';
 import { getTerminalId } from '@/lib/terminal';
 import { TableRow, TableOrderInfo } from '@/lib/types';
+import { loadWithCache } from '@/lib/offline/cache';
 
 export function useTables() {
   const [tables, setTables] = useState<TableRow[]>([]);
   const [tableOrders, setTableOrders] = useState<Record<string, TableOrderInfo>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
 
+  // Offline-first POS operation (CTO forensic audit 2026-09-21, P0 -- "menu/orders/tables are
+  // unavailable if the network drops"): falls back to the last successfully-fetched floor
+  // plan (IndexedDB, see lib/offline/cache.ts) so the Tables screen still shows something
+  // useful during a network blip, instead of going blank. Mutating actions below
+  // (moveTable/transfer/freeAll/merge/split/openTable) are deliberately NOT cache-backed --
+  // they change server state (or, for openTable on a free table, create a brand-new order),
+  // which needs a real network round trip and is out of this pass's offline scope.
   const refresh = useCallback(async () => {
     try {
-      const [tablesRes, ordersRes] = await Promise.all([getTables(), getOrders()]);
-      setTables(tablesRes.tables);
-      setTableOrders(ordersRes.tableOrders ?? {});
+      const [tablesResult, ordersResult] = await Promise.all([
+        loadWithCache('tables.list', () => getTables()),
+        loadWithCache('tables.orders', () => getOrders()),
+      ]);
+      setTables(tablesResult.value.tables);
+      setTableOrders(ordersResult.value.tableOrders ?? {});
+      setStale(tablesResult.stale || ordersResult.stale);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load tables');
@@ -47,6 +60,23 @@ export function useTables() {
       // terminal instead of falling back to 'unknown-terminal'.
       await transferTable(fromTable, toTable, getTerminalId());
       await refresh();
+    },
+    [refresh]
+  );
+
+  // Seat / server assignment (CTO forensic audit 2026-09-21, P1 -- "who is serving this
+  // table right now" is currently invisible). Optimistic update for the same instant feel as
+  // moveTable, rolling back to server truth on failure.
+  const assignServer = useCallback(
+    async (tableNumber: string, serverId: number | null) => {
+      setTables((prev) =>
+        prev.map((t) => (t.table_number === tableNumber ? { ...t, assigned_server_id: serverId } : t))
+      );
+      try {
+        await assignTableServer(tableNumber, serverId);
+      } catch {
+        refresh(); // roll back to server truth if the write failed
+      }
     },
     [refresh]
   );
@@ -124,5 +154,5 @@ export function useTables() {
     [tableOrders, refresh]
   );
 
-  return { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, split, openTable, refresh };
+  return { tables, tableOrders, loading, error, stale, moveTable, transfer, assignServer, freeAll, freeSelected, merge, split, openTable, refresh };
 }

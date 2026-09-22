@@ -28,6 +28,9 @@ import { publishCustomerDisplay } from '@/lib/customerDisplay';
 import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
 import { HeldCoursesBar } from './components/HeldCoursesBar';
 import { CartBillDialog } from './components/CartBillDialog';
+import { enqueueAction } from '@/lib/offline/outbox';
+import { isNetworkError } from '@/lib/offline/network';
+import { useOnlineStatus } from '@/lib/hooks/useOnlineStatus';
 
 export default function PosPageWrapper() {
   // useSearchParams needs a Suspense boundary for the static parts of this route to still
@@ -49,7 +52,17 @@ function PosPage() {
   const { categories, items, loading, error } = useMenu();
   const cart = useCart();
   const register = useRegisterSession();
+  // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): shared outbox/flush
+  // loop for this screen's two network-sensitive actions -- see lib/hooks/useOnlineStatus.ts
+  // and lib/offline/outbox.ts for exactly what's queued, why, and what's deliberately not.
+  const { online: isOnline } = useOnlineStatus();
   const [showPayment, setShowPayment] = useState(false);
+  // Payment idempotency (CTO forensic audit 2026-09-21): one key per checkout ATTEMPT --
+  // generated fresh each time the payment screen opens, and reused for every retry of that
+  // same attempt (e.g. the cashier re-tapping Charge after a slow/lost response) so a retry
+  // safely replays the original result instead of double-charging. Closing and reopening the
+  // payment screen starts a genuinely new attempt with a new key.
+  const chargeIdempotencyKeyRef = useRef<string | null>(null);
   const [charging, setCharging] = useState(false);
   const [chargeError, setChargeError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
@@ -202,8 +215,25 @@ function PosPage() {
     setActionError(null);
     try {
       const { quantities } = buildQuantities();
-      await sendTableOrderToKitchen(table, orderId, quantities, cart.total, buildLineDetail());
-      setLastResult(`Sent to kitchen for table #${table}.`);
+      const lines = buildLineDetail();
+      try {
+        await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lines);
+        setLastResult(`Sent to kitchen for table #${table}.`);
+      } catch (err) {
+        // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine network
+        // failure (not the server rejecting the request -- see lib/offline/network.ts) queues
+        // this send instead of losing it. It replays automatically, in order, the moment
+        // connectivity returns (lib/hooks/useOnlineStatus.ts), using the same idempotency key
+        // so a flaky connection retrying the flush can never create a duplicate ticket.
+        if (!isNetworkError(err)) throw err;
+        await enqueueAction({
+          type: 'orders.to-kitchen',
+          path: `/orders/to-kitchen/${encodeURIComponent(table)}`,
+          body: { tableNumber: table, orderId, quantities, total: cart.total, lines },
+          label: `Table #${table} -- send to kitchen`,
+        });
+        setLastResult(`Offline -- queued "send to kitchen" for table #${table}. Will sync automatically.`);
+      }
       // Course firing (CTO forensic audit 2026-09-20): a later course may now be sitting
       // held rather than already on the kitchen display -- refresh the held-courses bar.
       setHeldCoursesRefresh((n) => n + 1);
@@ -244,6 +274,14 @@ function PosPage() {
 
     setCharging(true);
     setChargeError(null);
+    // Generate the attempt's idempotency key ONCE, the first time this attempt runs -- a
+    // retry (this function called again while chargeError is set, before the modal has been
+    // closed and reopened) reuses the SAME key rather than minting a new one.
+    if (!chargeIdempotencyKeyRef.current) {
+      chargeIdempotencyKeyRef.current =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `charge-${Date.now()}-${Math.random()}`;
+    }
+    const idempotencyKey = chargeIdempotencyKeyRef.current;
     try {
       const { quantities, weights } = buildQuantities();
       const lineDetail = buildLineDetail();
@@ -252,11 +290,41 @@ function PosPage() {
       const paymentMethodLabel = isSplit ? 'split payment' : method!;
 
       if (isTableOrder && table && orderId) {
-        await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lineDetail);
-        await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges);
-        await finishOrder(orderId, table);
-        setShowPayment(false);
-        setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
+        try {
+          await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lineDetail, idempotencyKey + '-kitchen');
+          await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges, idempotencyKey);
+          await finishOrder(orderId, table);
+          setShowPayment(false);
+          setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
+        } catch (err) {
+          // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine
+          // network failure (not the server rejecting the charge -- see
+          // lib/offline/network.ts) queues the WHOLE checkout (kitchen send + charge +
+          // table-free) as one unit instead of leaving it half-done. It replays in order the
+          // moment connectivity returns; the table is only actually freed once that replay
+          // succeeds, never optimistically here, since the server hasn't recorded the
+          // payment yet. Direct-sale checkout (no table) deliberately has no equivalent path
+          // -- it creates a brand-new order, which needs real multi-terminal reconciliation
+          // this pass doesn't attempt (see lib/offline/db.ts's file header for why).
+          if (!isNetworkError(err)) throw err;
+          await enqueueAction({
+            type: 'orders.checkout-table',
+            path: '',
+            body: {
+              tableNumber: table,
+              orderId,
+              quantities,
+              total: cart.total,
+              lines: lineDetail,
+              method,
+              splitCharges,
+              keys: { toKitchen: idempotencyKey + '-kitchen', charge: idempotencyKey },
+            },
+            label: `Table #${table} -- charge €${cart.total.toFixed(2)} (${summaryLabel})`,
+          });
+          setShowPayment(false);
+          setLastResult(`Offline -- queued checkout for table #${table} (€${cart.total.toFixed(2)}, ${summaryLabel}). Will sync and free the table automatically.`);
+        }
         printReceipt({
           tableNumber: table,
           orderId,
@@ -273,7 +341,7 @@ function PosPage() {
       }
 
       const { order } = await sendDirectSaleToKitchen(quantities, cart.total, weights, lineDetail);
-      await chargeOrder(order.id, cart.total, method ?? 'card', splitCharges);
+      await chargeOrder(order.id, cart.total, method ?? 'card', splitCharges, idempotencyKey);
 
       setShowPayment(false);
       setLastResult(`Order #${order.id} charged €${cart.total.toFixed(2)} (${summaryLabel}).`);
@@ -311,6 +379,11 @@ function PosPage() {
             <div>
               <span className="font-semibold text-amber-900">Table #{table}</span>
               <span className="ml-2 text-xs text-amber-700">Order #{orderId}</span>
+              {!isOnline && (
+                <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                  Offline -- actions will queue and sync automatically
+                </span>
+              )}
             </div>
             <div className="flex gap-2">
               <button
@@ -360,14 +433,23 @@ function PosPage() {
           onSetQty={cart.setQty}
           onRemove={cart.removeItem}
           onClear={cart.clear}
-          onCharge={() => setShowPayment(true)}
+          onCharge={() => {
+            // A freshly-opened payment screen is a NEW checkout attempt -- clear any
+            // leftover key from a previous attempt so this one gets its own.
+            chargeIdempotencyKeyRef.current = null;
+            setShowPayment(true);
+          }}
         />
       </aside>
 
       {showPayment && (
         <PaymentModal
           total={cart.total}
-          onClose={() => setShowPayment(false)}
+          lines={cart.lines}
+          onClose={() => {
+            chargeIdempotencyKeyRef.current = null;
+            setShowPayment(false);
+          }}
           onConfirm={handleConfirmPayment}
           submitting={charging}
           error={chargeError}

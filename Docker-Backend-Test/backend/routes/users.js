@@ -18,6 +18,7 @@ const fetchuser = require('../middlewares/loggedIn');
 const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS, KNOWN_ROLES } = require('../config/permissions');
 const User = require('../models/User');
+const auditLog = require('../services/auditLog');
 
 // List staff for the current tenant. Passwords are never returned.
 router.get('/', fetchuser, requirePermission(PERMISSIONS.STAFF_VIEW), async (req, res) => {
@@ -71,6 +72,16 @@ router.post('/', fetchuser, requirePermission(PERMISSIONS.STAFF_MANAGE), [
             status: true,
         });
 
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'staff.create',
+            entityType: 'user',
+            entityId: newUser.id,
+            payload: { email: newUser.email, role: newUser.role },
+        });
+
         return res.json({
             status: true,
             message: 'Staff account created.',
@@ -107,6 +118,23 @@ router.patch('/:id', fetchuser, requirePermission(PERMISSIONS.STAFF_MANAGE), [
         if (req.body.status !== undefined) updates.status = req.body.status;
 
         await User.query().where('id', target.id).update(updates);
+
+        // Audit event log (CTO forensic audit 2026-09-21, P1 "Complete audit-event
+        // coverage"): a role or active-status change is exactly the kind of sensitive action
+        // that needs a real record of who changed it and to what -- only recorded when
+        // something actually changed, not on a no-op PATCH with neither field.
+        if (Object.keys(updates).length > 0) {
+            auditLog.record({
+                tenantId: req.body.tenant_id,
+                actorUserId: req.body.myID,
+                actorRole: req.authRole,
+                eventType: 'staff.update',
+                entityType: 'user',
+                entityId: target.id,
+                payload: { changes: updates, previous_role: target.role, previous_status: target.status },
+            });
+        }
+
         return res.json({ status: true, message: 'Staff account updated.' });
     } catch (e) {
         return res.status(500).json({ status: false, message: e.message });
