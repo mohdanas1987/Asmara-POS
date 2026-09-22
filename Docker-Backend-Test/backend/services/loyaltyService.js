@@ -8,6 +8,7 @@
  * always reconstructable and a bad transaction can be reasoned about and reversed with
  * another ledger row, never silently overwritten.
  */
+const { transaction } = require('objection');
 const Customer = require('../models/Customer');
 const LoyaltyConfig = require('../models/LoyaltyConfig');
 const LoyaltyLedger = require('../models/LoyaltyLedger');
@@ -23,9 +24,13 @@ async function getConfig(tenantId) {
   return config;
 }
 
-/** Current point balance for a customer: SUM(points) over their ledger, 0 if they have none. */
-async function getBalance(tenantId, customerId) {
-  const row = await LoyaltyLedger.forTenant(tenantId)
+/** Current point balance for a customer: SUM(points) over their ledger, 0 if they have none.
+ * Optional `trx` runs the read as part of an in-progress transaction (see `redeem` below), so
+ * it sees that transaction's own not-yet-committed writes rather than stale, pre-transaction
+ * data. */
+async function getBalance(tenantId, customerId, trx) {
+  const boundLedger = trx ? LoyaltyLedger.bindKnex(trx) : LoyaltyLedger;
+  const row = await boundLedger.forTenant(tenantId)
     .where('customer_id', customerId)
     .sum('points as total')
     .first();
@@ -43,10 +48,14 @@ async function getLedger(tenantId, customerId) {
     .orderBy('id', 'desc');
 }
 
-async function insertLedgerRow({ tenantId, customerId, orderId, type, points, reason, createdBy }) {
-  const currentBalance = await getBalance(tenantId, customerId);
+// Optional `trx` (an Objection transaction) lets a caller that needs to check-then-write
+// atomically (see `redeem` below) run this insert as part of that same transaction, instead
+// of it being its own separate, un-synchronized query.
+async function insertLedgerRow({ tenantId, customerId, orderId, type, points, reason, createdBy }, trx) {
+  const boundLedger = trx ? LoyaltyLedger.bindKnex(trx) : LoyaltyLedger;
+  const currentBalance = await getBalance(tenantId, customerId, trx);
   const balanceAfter = currentBalance + points;
-  return LoyaltyLedger.query().insert({
+  return boundLedger.query().insert({
     tenant_id: tenantId,
     customer_id: customerId,
     order_id: orderId ?? null,
@@ -78,22 +87,51 @@ async function earnForOrder({ tenantId, customerId, orderId, orderTotalEuros, cr
 /**
  * Redeem points for a euro discount. Throws (caller returns 400) rather than silently
  * clamping, so a cashier never redeems less than the customer asked for without knowing why.
+ *
+ * Loyalty transactional certification (CTO feedback 2026-09-22, item 14): this used to check
+ * the balance, then insert the redeem row as two completely separate, un-synchronized
+ * queries -- the exact same class of lost-update race this codebase has already fixed
+ * elsewhere for orders (optimistic locking) and idempotency keys (reserve-before-run). Two
+ * concurrent redemptions for the same customer (loyalty is tenant-wide, not per-terminal --
+ * a customer could plausibly be redeeming at one till while a manager applies a goodwill
+ * adjustment at another) could both read the same balance, both pass the "sufficient
+ * balance" check, and both insert -- overdrawing the customer's real balance into the
+ * negative with no error ever raised.
+ *
+ * Fixed by running the check and the insert inside one real transaction, then re-verifying
+ * the resulting balance is never negative BEFORE committing -- if two concurrent
+ * transactions both pass the initial check, this final assertion still catches whichever one
+ * commits second and rolls it back with a clear error, exactly like the ledger's own
+ * `assertSharesSumToTotal`-style defensive checks elsewhere in this codebase. This database
+ * (SQLite, see knexfile.local.js's own comment -- it is the real production store for the
+ * packaged desktop app, not just a test fixture) serializes concurrent write transactions at
+ * the file level, so this closes the race for real, not just in theory.
  */
 async function redeem({ tenantId, customerId, points, orderId, createdBy }) {
   const config = await getConfig(tenantId);
   if (points < config.min_redeem_points) {
     throw new Error(`Minimum redemption is ${config.min_redeem_points} points.`);
   }
-  const balance = await getBalance(tenantId, customerId);
-  if (points > balance) {
-    throw new Error(`Insufficient balance: customer has ${balance} points, tried to redeem ${points}.`);
-  }
-  const euroValue = (points * config.redeem_value_cents) / 100;
-  const ledgerRow = await insertLedgerRow({
-    tenantId, customerId, orderId, type: 'redeem', points: -points,
-    reason: `Redeemed ${points} points for EUR ${euroValue.toFixed(2)}`, createdBy,
+
+  return transaction(LoyaltyLedger, async (LoyaltyLedgerTx) => {
+    const balance = await getBalance(tenantId, customerId, LoyaltyLedgerTx.knex());
+    if (points > balance) {
+      throw new Error(`Insufficient balance: customer has ${balance} points, tried to redeem ${points}.`);
+    }
+
+    const euroValue = (points * config.redeem_value_cents) / 100;
+    const ledgerRow = await insertLedgerRow({
+      tenantId, customerId, orderId, type: 'redeem', points: -points,
+      reason: `Redeemed ${points} points for EUR ${euroValue.toFixed(2)}`, createdBy,
+    }, LoyaltyLedgerTx.knex());
+
+    const finalBalance = await getBalance(tenantId, customerId, LoyaltyLedgerTx.knex());
+    if (finalBalance < 0) {
+      throw new Error(`Redemption would overdraw this customer's balance (would end at ${finalBalance} points) -- likely a concurrent redemption. Please retry.`);
+    }
+
+    return { ledgerRow, euroValue };
   });
-  return { ledgerRow, euroValue };
 }
 
 /** Manual correction (positive or negative) -- e.g. a goodwill grant or fixing a mistake.
