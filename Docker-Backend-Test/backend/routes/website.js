@@ -20,6 +20,7 @@ const fetchuser = require('../middlewares/loggedIn');
 const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS } = require('../config/permissions');
 const websiteApiKey = require('../middlewares/websiteApiKey');
+const idempotent = require('../middlewares/idempotent');
 const WebsiteConnection = require('../models/WebsiteConnection');
 const MenuCategory = require('../models/MenuCategory');
 const Product = require('../models/Item');
@@ -99,8 +100,18 @@ router.get('/menu-feed', websiteApiKey, async (req, res) => {
     }
 });
 
-// Push-based order intake: the website calls this when a customer places an online order.
-router.post('/orders', websiteApiKey, async (req, res) => {
+// Website <-> POS synchronization (CTO feedback 2026-09-22, item 15): a website's checkout
+// plugin retrying this webhook after a timeout/dropped-response (an extremely common failure
+// mode for any webhook -- the order WAS created here, but the website never saw the response
+// confirming it) used to create a completely separate, duplicate online order every single
+// retry, with no way to tell they were meant to be the same purchase. Wrapped in the same
+// hardened `idempotent()` middleware already used for /orders/create, /orders/to-kitchen,
+// /orders/init, etc. (migrations_local/0023, middlewares/idempotent.js) -- a resend with the
+// same `idempotency_key` (the website should send ITS OWN order id here) returns the exact
+// same {order, status:true} response instead of creating a second order. OPTIONAL, so a
+// website integration that doesn't send one yet is completely unaffected (Preservation
+// Contract) -- exactly the same opt-in shape as every other idempotent route in this codebase.
+router.post('/orders', websiteApiKey, idempotent('website.orders'), async (req, res) => {
     try {
         const { items, total, customer_name, note } = req.body;
         if (!items || !total) {
