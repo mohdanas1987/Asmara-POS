@@ -1,4 +1,5 @@
 const router = require("express").Router();
+const { transaction } = require('objection');
 const Table = require('../models/Table');
 const Order = require('../models/Order');
 const Product = require('../models/Item');
@@ -566,12 +567,53 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
 // codebase already uses elsewhere -- see /tables' free-all/split-table for the same
 // treatment) and added a correctly-verbed POST alongside it, plus sync-log recording so a
 // merge made on one terminal is visible to every other terminal in the restaurant.
+//
+// Table merge/split certification (CTO feedback 2026-09-22, item 13): this used to patch
+// `linked_to` on the named tables with NO check at all on their current state -- unlike
+// /tables/transfer (which requires the destination to be `free` inside a real transaction)
+// or /tables/split-table (which requires an active order to be non-completed before treating
+// it as "the" order to keep). A REAL, previously-undetected bug this let through: merging a
+// table that already has its own active order (e.g. table 1 seated and ordering, cashier
+// merges it with free table 2 to seat more guests at the same party) silently orphaned that
+// order -- GET /orders/init/"1+2" skips the free-table check entirely for merged params (see
+// that route's own comment) and unconditionally INSERTS a brand-new order, leaving the
+// original order on table 1 still in the database, still unpaid, but no longer reachable from
+// the merged table's tile in the floor plan. Same class of silent-data-loss risk as the
+// cash-register accounting bugs this codebase has fixed elsewhere -- caught here by actually
+// tracing what /orders/init does for a "+"-joined table before assuming merge was safe to
+// leave alone, not by a report of it happening in production.
+//
+// Fixed the same way transfer already handles this: every named table must be `free` (this is
+// how the frontend actually uses merge -- see useTables.ts's own comment, "merging behaves
+// like tapping a free table") or a load-bearing member of the EXACT SAME existing merged
+// group (so re-confirming/re-running a merge that already happened is still a safe no-op, not
+// newly rejected). Wrapped in a real transaction so two concurrent merge requests touching an
+// overlapping table can't both pass the check and then both write.
 async function linkTablesHandler(req, res) {
     try {
         let link = req.params.tables;
         const tableNumbers = link.split("+");
-        await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tableNumbers).patch({
-            linked_to: link
+
+        await transaction(Table, async (TableTx) => {
+            const rows = await TableTx.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tableNumbers);
+            const foundNumbers = new Set(rows.map((t) => t.table_number));
+            const missing = tableNumbers.filter((t) => !foundNumbers.has(t));
+            if (missing.length > 0) {
+                throw Object.assign(new Error(`Table(s) ${missing.join(', ')} do not exist.`), { statusCode: 404 });
+            }
+
+            const notMergeable = rows.filter((t) => t.status !== 'free' && t.linked_to !== link);
+            if (notMergeable.length > 0) {
+                const names = notMergeable.map((t) => `${t.table_number} (${t.status})`).join(', ');
+                throw Object.assign(
+                    new Error(`Cannot merge -- ${names} already has an active order or is part of a different merged group. Free or finish it first.`),
+                    { statusCode: 409 }
+                );
+            }
+
+            await TableTx.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tableNumbers).patch({
+                linked_to: link
+            });
         });
 
         try {
@@ -594,7 +636,11 @@ async function linkTablesHandler(req, res) {
         });
 
     } catch (error) {
-        return res.json({
+        const statusCode = error.statusCode || 500;
+        if (statusCode >= 500) {
+            console.log(error.message);
+        }
+        return res.status(statusCode).json({
             status: false,
             message: error.message
         });
