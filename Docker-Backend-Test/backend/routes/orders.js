@@ -48,6 +48,7 @@ const { calculateInclusiveTax } = require('../utils/tax');
 const paymentLedger = require('../services/payments/paymentLedger');
 const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS } = require('../config/permissions');
+const { snapshotOrderLines } = require('../services/orderLineSnapshot');
 
 // Billing & payments completeness (task #37): both /create and /payment-update accept a
 // `modes` object shaped like { cash: 12.50 } or { card: 12.50 }, or (for the app's existing,
@@ -294,6 +295,28 @@ router.post('/prepared/:order', fetchuser, markPreparedHandler);
 
 router.post('/create', fetchuser, async (req, res) => {
     try {
+        // Order line normalization, phase 1 (production-completion spec, section 7): this
+        // route overwrites orders.data with the PAYMENT-MODE breakdown a few lines below
+        // (see the comment on that assignment), which discards whatever cart-line detail
+        // /orders/to-kitchen had stored there. Read it BEFORE that happens so it can be
+        // captured into an immutable order_items snapshot once the charge actually lands --
+        // see the snapshotOrderLines call after paymentLedger.recordCharges below.
+        let preChargeLines = null;
+        let preChargeQuantity = null;
+        if (req.body.order_id) {
+            const orderBeforeCharge = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id);
+            if (orderBeforeCharge && orderBeforeCharge.data) {
+                try {
+                    const parsed = JSON.parse(orderBeforeCharge.data);
+                    if (Array.isArray(parsed.lines)) preChargeLines = parsed.lines;
+                    if (parsed.quantity && typeof parsed.quantity === 'object') preChargeQuantity = parsed.quantity;
+                } catch (_parseErr) {
+                    // orders.data wasn't valid line-detail JSON (e.g. already payment-modes
+                    // shaped from an earlier /create call) -- nothing to snapshot from here.
+                }
+            }
+        }
+
         let lastSession = await CashRegister.query().where('tenant_id', req.body.tenant_id).where('status', true).select('id').first().orderBy('id', 'DESC');
         if (lastSession) {
             lastSession = lastSession.id;
@@ -348,6 +371,21 @@ router.post('/create', fetchuser, async (req, res) => {
                 payments: charges,
                 createdBy: req.body.myID,
             });
+
+            // Order line normalization, phase 1: snapshot the order's lines into
+            // order_items/order_item_modifiers now that a real charge has been recorded.
+            // Best-effort, exactly like loyalty earning and offline-sync recording elsewhere
+            // in this file -- a snapshot failure must never stop a payment from completing.
+            try {
+                await snapshotOrderLines({
+                    tenantId: req.body.tenant_id,
+                    orderId: order.id,
+                    lines: preChargeLines,
+                    fallbackQuantities: preChargeQuantity,
+                });
+            } catch (snapshotError) {
+                console.log('[order-line-snapshot] non-fatal: could not snapshot order lines:', snapshotError.message);
+            }
         }
         const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: order.id });
         const derivedStatus = paymentLedger.deriveStatus(netPaid, order.total);
