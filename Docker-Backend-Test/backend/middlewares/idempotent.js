@@ -17,6 +17,17 @@
  * required, so no existing caller (frontend not yet updated, or a test that predates this) is
  * broken by adding this middleware to a route.
  *
+ * GET-ROUTE FIX (CTO remediation doc, Section 1 -- "true offline-first new order creation"):
+ * this was wrapped around GET /orders/init/:table earlier (offline-order-init.test.js) and
+ * tested there via supertest's `.get(...).send({idempotency_key})`, which DOES put a body on
+ * a GET request. A real browser's `fetch()` throws if you try that ("Request with GET/HEAD
+ * method cannot have body") -- so as originally written, this middleware's GET support was
+ * unreachable from any real frontend caller, tested-but-dead. Found while wiring the actual
+ * offline "open a table" flow (RestaurantOS-Frontend/src/lib/offline/offlineOrders.ts), which
+ * needs to pass an idempotency key to a GET route. Fixed by also accepting the key (and
+ * nothing else) from the query string, so a GET caller can use
+ * `/orders/init/20?idempotency_key=...` while every POST caller is completely unaffected.
+ *
  * RACE-CONDITION FIX (this hardening pass): the original implementation only ever wrote a row
  * AFTER the handler finished, so two requests with the identical key could both pass the
  * "does a row already exist?" check before either had written one, and both would run the
@@ -46,7 +57,7 @@ const PENDING_TTL_MS = 2 * 60 * 1000;
 
 function idempotent(route) {
   return function idempotentMiddleware(req, res, next) {
-    const key = req.body && req.body.idempotency_key;
+    const key = (req.body && req.body.idempotency_key) || (req.query && req.query.idempotency_key);
     if (!key || typeof key !== 'string') {
       return next(); // no key supplied -- behave exactly as before this middleware existed
     }
