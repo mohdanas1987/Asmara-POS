@@ -23,13 +23,79 @@ const crypto = require('crypto');
 // for video) into tmp/branding/ or tmp/customer-display/ -- both already served statically
 // at /images/<path> by server.local.js's existing `app.use('/images', express.static(tmp))`
 // mount, the same one item photos use. Raw temp file is deleted after processing either way.
-const mediaUpload = multer({ dest: path.join(__dirname, '../tmp/uploads-tmp') });
+// Customer-display media security hardening (CTO feedback 2026-09-22, item 22): this upload
+// had no file-size limit at all (any settings.manage user, or a compromised such account,
+// could fill the disk with a single request) and validated file TYPE only by the client-
+// supplied filename's extension -- trivially spoofed by renaming any file to end in ".mp4".
+// A 100MB cap covers any real customer-display video/slideshow asset with room to spare while
+// closing the unbounded-upload DoS. Real per-file MIME sniffing (checkVideoMagicBytes below)
+// happens after upload, in the /customer-display/media handler, once the actual file bytes
+// are on disk -- multer's own `fileFilter` only ever sees the client-supplied filename/
+// mimetype, which is exactly the untrustworthy signal this is trying to stop relying on.
+const mediaUpload = multer({ dest: path.join(__dirname, '../tmp/uploads-tmp'), limits: { fileSize: 100 * 1024 * 1024 } });
+
+// multer throws (via `next(err)`) from INSIDE the upload middleware itself, before this
+// route's own handler and its try/catch ever run -- left alone, a too-large file would fall
+// through to server.local.js's generic error handler and come back as an opaque 500 ("An
+// unexpected error occurred") instead of a clear, actionable 400. This wrapper intercepts
+// that error right where it happens and turns it into the same {status:false, message} shape
+// every other validation failure in this codebase already returns.
+function uploadMediaField(fieldName) {
+    return function uploadMediaFile(req, res, next) {
+        mediaUpload.single(fieldName)(req, res, (err) => {
+            if (!err) return next();
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ status: false, message: 'File is too large (limit: 100MB).' });
+            }
+            return res.status(400).json({ status: false, message: err.message || 'Upload failed.' });
+        });
+    };
+}
+const uploadMediaFile = uploadMediaField('file');
+const uploadLogoFile = uploadMediaField('logo');
 const BRANDING_DIR = path.join(__dirname, '../tmp/branding');
 const CUSTOMER_DISPLAY_DIR = path.join(__dirname, '../tmp/customer-display');
 for (const dir of [BRANDING_DIR, CUSTOMER_DISPLAY_DIR]) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg']);
+
+// Real content-based validation for the video path (CTO feedback 2026-09-22, item 22): the
+// image path already gets this for free -- sharp actually decodes the file, so a renamed
+// non-image fails there with a real error rather than being silently accepted. The video path
+// used to just fs.copyFileSync the upload verbatim based on nothing but its claimed extension.
+// This checks the file's own magic bytes against the known container signatures for the
+// extensions this route claims to accept, so a file that isn't actually one of them (e.g. an
+// .html or .svg renamed to .mp4) is rejected before it's ever written into the served
+// customer-display directory or added to the tenant's media list.
+function looksLikeRealVideo(filePath, ext) {
+    const buf = Buffer.alloc(16);
+    let bytesRead = 0;
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            bytesRead = fs.readSync(fd, buf, 0, 16, 0);
+        } finally {
+            fs.closeSync(fd);
+        }
+    } catch (readError) {
+        return false;
+    }
+    if (bytesRead < 8) return false;
+
+    if (ext === '.webm') {
+        // EBML magic number (also used by .mkv) -- 0x1A 0x45 0xDF 0xA3.
+        return buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3;
+    }
+    if (ext === '.ogg') {
+        return buf.toString('ascii', 0, 4) === 'OggS';
+    }
+    // .mp4 / .mov / .m4v all use the ISO base media file format container -- a 4-byte size
+    // field followed by an 'ftyp' box type at bytes 4-7 (occasionally 'free'/'wide' first for
+    // some encoders/muxers, so both are accepted rather than only the single most common case).
+    const boxType = buf.toString('ascii', 4, 8);
+    return boxType === 'ftyp' || boxType === 'free' || boxType === 'wide' || boxType === 'moov';
+}
 
 let error = { status : false, message:'Something went wrong!' }
 
@@ -240,7 +306,7 @@ router.get('/branding', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/branding/logo', [mediaUpload.single('logo'), fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
+router.post('/branding/logo', [uploadLogoFile, fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ status: false, message: 'No file uploaded.' });
         const filename = `logo-${req.body.tenant_id}-${Date.now()}.webp`;
@@ -297,7 +363,7 @@ router.get('/customer-display/media', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/customer-display/media', [mediaUpload.single('file'), fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
+router.post('/customer-display/media', [uploadMediaFile, fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ status: false, message: 'No file uploaded.' });
         const ext = path.extname(req.file.originalname || '').toLowerCase();
@@ -306,6 +372,10 @@ router.post('/customer-display/media', [mediaUpload.single('file'), fetchuser, r
         let relPath;
 
         if (isVideo) {
+            if (!looksLikeRealVideo(req.file.path, ext)) {
+                try { fs.unlinkSync(req.file.path); } catch (cleanupErr) {}
+                return res.status(400).json({ status: false, message: `This file's content doesn't match a real ${ext} video -- it may be mislabeled or corrupted.` });
+            }
             const filename = `${id}${ext || '.mp4'}`;
             fs.copyFileSync(req.file.path, path.join(CUSTOMER_DISPLAY_DIR, filename));
             relPath = `customer-display/${filename}`;
