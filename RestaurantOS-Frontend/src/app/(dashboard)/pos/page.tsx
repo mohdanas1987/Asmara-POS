@@ -32,6 +32,7 @@ import { enqueueAction } from '@/lib/offline/outbox';
 import { isNetworkError } from '@/lib/offline/network';
 import { isLocalOrderId } from '@/lib/offline/offlineOrders';
 import { removeQueuedActionsForOrder } from '@/lib/offline/outbox';
+import { saveCartDraft, getCartDraft, clearCartDraft } from '@/lib/offline/cartDrafts';
 import { useOnlineStatus } from '@/lib/hooks/useOnlineStatus';
 
 export default function PosPageWrapper() {
@@ -91,10 +92,28 @@ function PosPage() {
   // so re-opening a table shows what was already ordered, instead of an empty cart that
   // would silently wipe out earlier items on the next "Send to kitchen".
   useEffect(() => {
-    if (!isTableOrder || loading || items.length === 0 || preloaded) return;
+    if (!isTableOrder || loading || items.length === 0 || preloaded || !orderId) return;
     let cancelled = false;
-    getOrders()
-      .then((res) => {
+
+    // Offline restart recovery (CTO remediation doc, Section 5): a local draft, if one
+    // exists for this order, reflects this terminal's own most-recent cart state --
+    // including anything added but never sent to kitchen, which the server-side path below
+    // cannot see at all. Takes priority over the server preload rather than merging with it
+    // (see cartDrafts.ts's own comment on why this is deliberately single-terminal). A local
+    // (not-yet-synced) order id has nothing to preload from the server anyway.
+    getCartDraft(orderId)
+      .then((draftLines) => {
+        if (cancelled) return false;
+        if (draftLines && draftLines.length > 0) {
+          cart.loadFromPersistedLines(draftLines);
+          setPreloaded(true);
+          return true;
+        }
+        return false;
+      })
+      .then((restoredFromDraft) => {
+        if (cancelled || restoredFromDraft) return;
+        return getOrders().then((res) => {
         if (cancelled || !table) return;
         const existing = res.tableOrders?.[table];
         const savedLines = (existing?.data as { lines?: OrderLineDetail[] } | undefined)?.lines;
@@ -116,18 +135,35 @@ function PosPage() {
         } else {
           cart.loadFromQuantities(existing?.data?.quantity, items);
         }
+        })
+        .catch(() => {
+          /* best-effort preload -- an empty cart is a safe fallback */
+        })
+        .finally(() => {
+          if (!cancelled) setPreloaded(true);
+        });
       })
       .catch(() => {
-        /* best-effort preload -- an empty cart is a safe fallback */
-      })
-      .finally(() => {
         if (!cancelled) setPreloaded(true);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTableOrder, loading, items, preloaded, table]);
+  }, [isTableOrder, loading, items, preloaded, table, orderId]);
+
+  // Offline restart recovery (CTO remediation doc, Section 5): persist the cart's full
+  // current composition every time it changes, so a refresh/restart before "send to
+  // kitchen" (or between sends) can restore it via the effect above. Skipped until the
+  // initial preload above has actually run (`preloaded`) -- otherwise the very act of
+  // preloading (which itself calls setLines) would immediately re-save whatever was just
+  // restored, which is harmless but pointless, and would also fire once with an EMPTY cart
+  // before preload has had a chance to run at all, clobbering a real draft with nothing.
+  useEffect(() => {
+    if (!isTableOrder || !orderId || !preloaded) return;
+    saveCartDraft(orderId, cart.lines);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTableOrder, orderId, preloaded, cart.lines]);
 
   // Customer-facing display (second monitor, opened by the desktop shell): mirrors the
   // current order live so a customer can follow along as items are rung up, the same way
@@ -276,10 +312,12 @@ function PosPage() {
       // marked occupied server-side, so there's nothing to free either.
       if (isLocalOrderId(orderId)) {
         await removeQueuedActionsForOrder(orderId);
+        await clearCartDraft(orderId);
         router.push('/tables');
         return;
       }
       await cancelOrder(orderId, table);
+      await clearCartDraft(orderId);
       router.push('/tables');
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not cancel this order.');
@@ -374,6 +412,10 @@ function PosPage() {
           paymentMethod: paymentMethodLabel,
         });
         cart.clear();
+        // Offline restart recovery (CTO remediation doc, Section 5): the order is finished --
+        // clear its persisted draft so a stale one can never resurface for whatever order
+        // this table number is next used for.
+        await clearCartDraft(orderId);
         register.refresh();
         router.push('/tables');
         return;

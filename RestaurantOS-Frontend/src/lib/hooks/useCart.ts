@@ -138,6 +138,17 @@ export function useCart() {
     []
   );
 
+  // Offline restart recovery (CTO remediation doc, Section 5): restores a cart VERBATIM from
+  // a locally-persisted draft (see lib/offline/cartDrafts.ts) -- unlike loadFromQuantities/
+  // loadFromLines above, there's no reconstruction-from-a-flat-map step here, because the
+  // draft already stores full CartLine objects (including modifiers and weight readings,
+  // which a plain quantity map can't represent at all). This is what actually closes the gap
+  // those two functions' own comments note ("weight-based and modifier-selected lines can't
+  // be reconstructed from a plain qty map").
+  const loadFromPersistedLines = useCallback((persistedLines: CartLine[]) => {
+    setLines(persistedLines);
+  }, []);
+
   // Owner-reported bug: a menu item with a malformed price string (e.g. a legacy dual
   // "22.00 /24.00" combo price never split into two real items) made `item.price * qty`
   // evaluate to NaN -- and because this is a SUM, adding that one NaN line silently
@@ -178,6 +189,7 @@ export function useCart() {
     clear,
     loadFromQuantities,
     loadFromLines,
+    loadFromPersistedLines,
     subtotal,
     tax,
     total,

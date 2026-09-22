@@ -25,11 +25,10 @@
  */
 
 const DB_NAME = 'asmara-pos-offline';
-// Bumped to 2 (CTO remediation doc, Section 1: "true offline-first new order creation") for
-// the new OFFLINE_ORDERS_STORE below. IndexedDB runs onupgradeneeded automatically for every
-// browser that already has version 1 -- no migration script, no data loss for CACHE_STORE/
-// OUTBOX_STORE (onupgradeneeded only ADDS the new store; it never touches the existing ones).
-const DB_VERSION = 2;
+// Bumped to 3 (CTO remediation doc, Section 5: "offline restart recovery" -- add 5 items,
+// restart, reopen, items must still exist) for the new CART_DRAFTS_STORE below. Each bump
+// only ADDS a store in onupgradeneeded; existing stores and their data are untouched.
+const DB_VERSION = 3;
 export const CACHE_STORE = 'cache';
 export const OUTBOX_STORE = 'outbox';
 // Local record of a table/order opened while offline, before the server has ever heard of it
@@ -38,6 +37,14 @@ export const OUTBOX_STORE = 'outbox';
 // must survive independently of whatever the last successful GET happened to cache, and must
 // never be silently evicted or overwritten by a cache refresh.
 export const OFFLINE_ORDERS_STORE = 'offlineOrders';
+// The cart's current line items (added, not-yet-or-already-sent-to-kitchen) for one order,
+// keyed by that order's id -- real or local placeholder (see cartDrafts.ts). Before this,
+// lib/hooks/useCart.ts held lines in plain React state only: a page refresh (or an app/OS
+// restart) while a cashier had items rung up but not yet sent to kitchen lost them silently,
+// for both online AND offline orders. Section 5 of the remediation doc makes this a named,
+// concrete requirement for offline orders; fixing it for online orders too is the same one
+// change, since the loss was never actually offline-specific.
+export const CART_DRAFTS_STORE = 'cartDrafts';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -63,6 +70,9 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains(OFFLINE_ORDERS_STORE)) {
           db.createObjectStore(OFFLINE_ORDERS_STORE, { keyPath: 'clientOrderId' });
+        }
+        if (!db.objectStoreNames.contains(CART_DRAFTS_STORE)) {
+          db.createObjectStore(CART_DRAFTS_STORE, { keyPath: 'orderId' });
         }
       };
       req.onsuccess = () => resolve(req.result);
