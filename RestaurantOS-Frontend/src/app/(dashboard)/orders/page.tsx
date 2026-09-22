@@ -5,10 +5,11 @@ import clsx from 'clsx';
 import { useOrders } from '@/lib/hooks/useOrders';
 import { OrderRow } from '@/lib/types';
 import { OrderPaymentsDialog } from '@/components/orders/OrderPaymentsDialog';
+import { TopBar } from '@/components/layout/TopBar';
 import { parsePrice } from '@/lib/tax';
 
 const STATUS_BADGE: Record<string, string> = {
-  ongoing: 'bg-neutral-100 text-neutral-700',
+  ongoing: 'bg-surface-sunken text-ink',
   'in-kitchen': 'bg-amber-100 text-amber-800',
   completed: 'bg-emerald-100 text-emerald-800',
 };
@@ -45,15 +46,16 @@ export default function OrdersPage() {
   }, [orders, query, statusFilter]);
 
   return (
-    <main className="flex h-screen flex-col p-4">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold text-neutral-900">📋 Orders</h1>
+    <main className="flex h-screen flex-col">
+      <TopBar title="📋 Orders" />
+      <div className="flex-1 overflow-y-auto p-4">
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <input
           placeholder="Search by order id, table, or cashier…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="w-64 rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="w-64 rounded-lg border border-border px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
         />
         {(['all', 'ongoing', 'in-kitchen', 'completed'] as const).map((s) => (
           <button
@@ -61,7 +63,7 @@ export default function OrdersPage() {
             onClick={() => setStatusFilter(s)}
             className={clsx(
               'rounded-full px-3 py-1.5 text-xs font-medium capitalize transition-colors',
-              statusFilter === s ? 'bg-brand text-white' : 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300'
+              statusFilter === s ? 'bg-brand text-white' : 'bg-neutral-200 text-ink hover:bg-neutral-300'
             )}
           >
             {s}
@@ -69,13 +71,13 @@ export default function OrdersPage() {
         ))}
       </div>
 
-      {loading && <p className="text-neutral-400">Loading orders…</p>}
+      {loading && <p className="text-ink-muted">Loading orders…</p>}
       {error && <p className="text-red-600">{error}</p>}
 
       {!loading && !error && (
-        <div className="flex-1 overflow-auto rounded-2xl border border-neutral-200 bg-white shadow-sm">
+        <div className="flex-1 overflow-auto rounded-2xl border border-border bg-surface shadow-sm">
           <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
+            <thead className="sticky top-0 bg-surface-sunken text-xs uppercase tracking-wide text-ink-muted">
               <tr>
                 <th className="px-4 py-2">Order</th>
                 <th className="px-4 py-2">Table</th>
@@ -90,23 +92,23 @@ export default function OrdersPage() {
             <tbody>
               {filtered.map((o) => (
                 <tr key={o.id} className="border-t border-neutral-100 transition-colors hover:bg-brand/5">
-                  <td className="px-4 py-2 font-mono text-xs text-neutral-500">{o.id.slice(0, 8)}</td>
+                  <td className="px-4 py-2 font-mono text-xs text-ink-muted">{o.id.slice(0, 8)}</td>
                   <td className="px-4 py-2">{o.tables ?? '—'}</td>
                   <td className="px-4 py-2">{o.cashier?.name ?? '—'}</td>
                   <td className="px-4 py-2">
-                    <span className={clsx('rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_BADGE[o.status] ?? 'bg-neutral-100 text-neutral-700')}>
+                    <span className={clsx('rounded-full px-2 py-0.5 text-xs font-medium capitalize', STATUS_BADGE[o.status] ?? 'bg-surface-sunken text-ink')}>
                       {o.status}
                     </span>
                   </td>
                   <td className="px-4 py-2">
-                    <span className={clsx('rounded-full px-2 py-0.5 text-xs font-medium capitalize', PAYMENT_BADGE[o.payment_status] ?? 'bg-neutral-100 text-neutral-700')}>
+                    <span className={clsx('rounded-full px-2 py-0.5 text-xs font-medium capitalize', PAYMENT_BADGE[o.payment_status] ?? 'bg-surface-sunken text-ink')}>
                       {o.payment_status}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-right font-semibold text-neutral-900">
+                  <td className="px-4 py-2 text-right font-semibold text-ink">
                     {o.total != null ? `€${parsePrice(o.total).toFixed(2)}` : '—'}
                   </td>
-                  <td className="px-4 py-2 text-neutral-500">{formatDate(o.created_at)}</td>
+                  <td className="px-4 py-2 text-ink-muted">{formatDate(o.created_at)}</td>
                   <td className="px-4 py-2 text-right">
                     <button
                       type="button"
@@ -120,7 +122,7 @@ export default function OrdersPage() {
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-neutral-400">
+                  <td colSpan={8} className="px-4 py-12 text-center text-ink-muted">
                     No orders match.
                   </td>
                 </tr>
@@ -131,6 +133,7 @@ export default function OrdersPage() {
       )}
 
       <OrderPaymentsDialog orderId={paymentsOrderId} onClose={() => setPaymentsOrderId(null)} />
+      </div>
     </main>
   );
 }

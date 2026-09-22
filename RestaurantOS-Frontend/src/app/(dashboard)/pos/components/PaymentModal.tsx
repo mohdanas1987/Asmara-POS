@@ -156,9 +156,9 @@ export function PaymentModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-2xl bg-surface p-6 shadow-xl">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-neutral-900">Take payment</h2>
+          <h2 className="text-lg font-semibold text-ink">Take payment</h2>
           <button
             type="button"
             onClick={() => setSplitMode((v) => !v)}
@@ -178,7 +178,7 @@ export function PaymentModal({
                 onClick={() => setMethod(m)}
                 disabled={submitting}
                 className={`rounded-xl border-2 py-4 text-sm font-medium capitalize transition-colors ${
-                  method === m ? 'border-brand bg-brand/5 text-brand' : 'border-neutral-200 text-neutral-600'
+                  method === m ? 'border-brand bg-brand/5 text-brand' : 'border-border text-ink-muted'
                 }`}
               >
                 {m}
@@ -189,7 +189,7 @@ export function PaymentModal({
 
         {splitMode && (
           <div className="mt-4 flex flex-col gap-3">
-            <div className="flex gap-1 rounded-lg bg-neutral-100 p-1 text-xs font-medium">
+            <div className="flex gap-1 rounded-lg bg-surface-sunken p-1 text-xs font-medium">
               {(['amount', 'percentage', 'item'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -197,7 +197,7 @@ export function PaymentModal({
                   disabled={submitting || (mode === 'item' && lines.length === 0)}
                   onClick={() => setSplitBy(mode)}
                   className={`flex-1 rounded-md py-1.5 capitalize transition-colors disabled:opacity-40 ${
-                    splitBy === mode ? 'bg-white text-brand shadow-sm' : 'text-neutral-500'
+                    splitBy === mode ? 'bg-surface text-brand shadow-sm' : 'text-ink-muted'
                   }`}
                 >
                   {mode === 'item' ? 'By item' : mode}
@@ -206,7 +206,7 @@ export function PaymentModal({
             </div>
 
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-neutral-600">Split into</span>
+              <span className="text-ink-muted">Split into</span>
               <input
                 type="number"
                 min={2}
@@ -214,9 +214,9 @@ export function PaymentModal({
                 value={splitCount}
                 disabled={submitting}
                 onChange={(e) => resizePayerList(Number(e.target.value) || 2)}
-                className="w-16 rounded-lg border border-neutral-300 px-2 py-1 text-center text-sm"
+                className="w-16 rounded-lg border border-border px-2 py-1 text-center text-sm"
               />
-              <span className="text-neutral-600">ways</span>
+              <span className="text-ink-muted">ways</span>
             </div>
 
             {splitBy === 'amount' && (
@@ -224,7 +224,7 @@ export function PaymentModal({
                 <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
                   {shares.map((share, i) => (
                     <div key={i} className="flex items-center gap-2">
-                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
+                      <span className="w-14 text-xs text-ink-muted">#{i + 1}</span>
                       <input
                         type="number"
                         step="0.01"
@@ -232,13 +232,13 @@ export function PaymentModal({
                         value={share.amount}
                         disabled={submitting}
                         onChange={(e) => updateShareAmount(i, Number(e.target.value) || 0)}
-                        className="flex-1 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        className="flex-1 rounded-lg border border-border px-2 py-1.5 text-sm"
                       />
                       <select
                         value={share.method}
                         disabled={submitting}
                         onChange={(e) => updateShareMethod(i, e.target.value as 'cash' | 'card')}
-                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        className="rounded-lg border border-border px-2 py-1.5 text-sm"
                       >
                         <option value="card">Card</option>
                         <option value="cash">Cash</option>
@@ -261,7 +261,7 @@ export function PaymentModal({
                 <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
                   {percentages.map((pct, i) => (
                     <div key={i} className="flex items-center gap-2">
-                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
+                      <span className="w-14 text-xs text-ink-muted">#{i + 1}</span>
                       <input
                         type="number"
                         min="0"
@@ -271,10 +271,10 @@ export function PaymentModal({
                         onChange={(e) =>
                           setPercentages((prev) => prev.map((p, idx) => (idx === i ? Number(e.target.value) || 0 : p)))
                         }
-                        className="w-20 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        className="w-20 rounded-lg border border-border px-2 py-1.5 text-sm"
                       />
-                      <span className="text-xs text-neutral-500">%</span>
-                      <span className="flex-1 text-right text-sm text-neutral-600">
+                      <span className="text-xs text-ink-muted">%</span>
+                      <span className="flex-1 text-right text-sm text-ink-muted">
                         €{percentValid && percentAmounts[i] !== undefined ? percentAmounts[i].toFixed(2) : '—'}
                       </span>
                       <select
@@ -283,7 +283,7 @@ export function PaymentModal({
                         onChange={(e) =>
                           setPercentMethods((prev) => prev.map((m, idx) => (idx === i ? (e.target.value as 'cash' | 'card') : m)))
                         }
-                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        className="rounded-lg border border-border px-2 py-1.5 text-sm"
                       >
                         <option value="card">Card</option>
                         <option value="cash">Cash</option>
@@ -305,14 +305,14 @@ export function PaymentModal({
                     return (
                       <div key={key} className="flex items-center gap-2 text-sm">
                         <span className="min-w-0 flex-1 truncate">{lineLabel(line)}</span>
-                        <span className="w-14 text-right text-neutral-500">€{lineTotal(line).toFixed(2)}</span>
+                        <span className="w-14 text-right text-ink-muted">€{lineTotal(line).toFixed(2)}</span>
                         <select
                           value={itemAssignments[key] ?? ''}
                           disabled={submitting}
                           onChange={(e) =>
                             setItemAssignments((prev) => ({ ...prev, [key]: Number(e.target.value) }))
                           }
-                          className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                          className="rounded-lg border border-border px-2 py-1.5 text-sm"
                         >
                           <option value="" disabled>
                             Assign…
@@ -330,13 +330,13 @@ export function PaymentModal({
                 <div className="flex flex-col gap-1.5 border-t border-neutral-100 pt-2">
                   {itemPayerTotals.map((amount, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm">
-                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
-                      <span className="flex-1 text-neutral-600">€{amount.toFixed(2)}</span>
+                      <span className="w-14 text-xs text-ink-muted">#{i + 1}</span>
+                      <span className="flex-1 text-ink-muted">€{amount.toFixed(2)}</span>
                       <select
                         value={itemMethods[i]}
                         disabled={submitting}
                         onChange={(e) => setItemMethods((prev) => prev.map((m, idx) => (idx === i ? (e.target.value as 'cash' | 'card') : m)))}
-                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        className="rounded-lg border border-border px-2 py-1.5 text-sm"
                       >
                         <option value="card">Card</option>
                         <option value="cash">Cash</option>

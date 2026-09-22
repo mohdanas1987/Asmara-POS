@@ -13,6 +13,23 @@ const { PERMISSIONS } = require('../config/permissions');
 const { uploadFile, getCurrentDate, runScheduledJobs } = require("../utils");
 const Queue = require("../models/Queue");
 const { REPORT_KEY_NAME } = require("../utils/constants");
+const multer = require('multer');
+const sharp = require('sharp');
+const fs = require('fs');
+const crypto = require('crypto');
+
+// Branding / customer-display media uploads (POS beautification pass): raw uploads land in
+// tmp/uploads-tmp/ via multer, then get processed (resized to webp for images, left as-is
+// for video) into tmp/branding/ or tmp/customer-display/ -- both already served statically
+// at /images/<path> by server.local.js's existing `app.use('/images', express.static(tmp))`
+// mount, the same one item photos use. Raw temp file is deleted after processing either way.
+const mediaUpload = multer({ dest: path.join(__dirname, '../tmp/uploads-tmp') });
+const BRANDING_DIR = path.join(__dirname, '../tmp/branding');
+const CUSTOMER_DISPLAY_DIR = path.join(__dirname, '../tmp/customer-display');
+for (const dir of [BRANDING_DIR, CUSTOMER_DISPLAY_DIR]) {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogg']);
 
 let error = { status : false, message:'Something went wrong!' }
 
@@ -200,5 +217,124 @@ router.post('/daily-reports-time', fetchuser, requirePermission(PERMISSIONS.SETT
         body: req.body
     });
 })
+
+
+// ---------------------------------------------------------------------------------------
+// Branding: restaurant logo shown in the sidebar/top-bar header and the login screen.
+// Tenant-wide (user_id left null), not per-staff-member -- everyone at this restaurant
+// sees the same logo, unlike the per-user STOCK_ALERT/INVENTORY_IS settings above.
+// ---------------------------------------------------------------------------------------
+router.get('/branding', fetchuser, async (req, res) => {
+    try {
+        const row = await Setting.query().where('tenant_id', req.body.tenant_id).where('key', 'BRANDING_LOGO').first();
+        return res.json({ status: true, logo: row ? row.value : null });
+    } catch (e) {
+        return res.json({ status: false, logo: null });
+    }
+});
+
+router.post('/branding/logo', [mediaUpload.single('logo'), fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ status: false, message: 'No file uploaded.' });
+        const filename = `logo-${req.body.tenant_id}-${Date.now()}.webp`;
+        const outputPath = path.join(BRANDING_DIR, filename);
+        await sharp(req.file.path).resize(256, 256, { fit: 'inside' }).webp({ quality: 90 }).toFile(outputPath);
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+        const relPath = `branding/${filename}`;
+
+        const existing = await Setting.query().where('tenant_id', req.body.tenant_id).where('key', 'BRANDING_LOGO').first();
+        if (existing) {
+            await Setting.query().where('id', existing.id).patch({ value: relPath });
+        } else {
+            await Setting.query().insert({ tenant_id: req.body.tenant_id, key: 'BRANDING_LOGO', value: relPath });
+        }
+        return res.json({ status: true, logo: relPath });
+    } catch (e) {
+        console.log('branding logo upload failed:', e.message);
+        return res.status(500).json({ status: false, message: 'Upload failed.' });
+    }
+});
+
+// ---------------------------------------------------------------------------------------
+// Customer display media: the slideshow/video loop shown on the second-monitor customer
+// screen when idle, and behind the bill panel while a sale is in progress. Tenant-wide,
+// ordered list stored as one JSON-encoded Setting row (small, infrequently-written list --
+// not worth its own migration/table for a POS beautification pass).
+// ---------------------------------------------------------------------------------------
+async function readMediaList(tenantId) {
+    const row = await Setting.query().where('tenant_id', tenantId).where('key', 'CUSTOMER_DISPLAY_MEDIA').first();
+    if (!row || !row.value) return [];
+    try {
+        const parsed = JSON.parse(row.value);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+async function writeMediaList(tenantId, list) {
+    const existing = await Setting.query().where('tenant_id', tenantId).where('key', 'CUSTOMER_DISPLAY_MEDIA').first();
+    const value = JSON.stringify(list);
+    if (existing) {
+        await Setting.query().where('id', existing.id).patch({ value });
+    } else {
+        await Setting.query().insert({ tenant_id: tenantId, key: 'CUSTOMER_DISPLAY_MEDIA', value });
+    }
+}
+
+router.get('/customer-display/media', fetchuser, async (req, res) => {
+    try {
+        return res.json({ status: true, media: await readMediaList(req.body.tenant_id) });
+    } catch (e) {
+        return res.json({ status: false, media: [] });
+    }
+});
+
+router.post('/customer-display/media', [mediaUpload.single('file'), fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ status: false, message: 'No file uploaded.' });
+        const ext = path.extname(req.file.originalname || '').toLowerCase();
+        const isVideo = VIDEO_EXT.has(ext);
+        const id = crypto.randomBytes(8).toString('hex');
+        let relPath;
+
+        if (isVideo) {
+            const filename = `${id}${ext || '.mp4'}`;
+            fs.copyFileSync(req.file.path, path.join(CUSTOMER_DISPLAY_DIR, filename));
+            relPath = `customer-display/${filename}`;
+        } else {
+            const filename = `${id}.webp`;
+            await sharp(req.file.path).resize(1920, 1080, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 85 }).toFile(path.join(CUSTOMER_DISPLAY_DIR, filename));
+            relPath = `customer-display/${filename}`;
+        }
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+
+        const list = await readMediaList(req.body.tenant_id);
+        const entry = { id, file: relPath, type: isVideo ? 'video' : 'image', name: req.file.originalname || filename, created_at: new Date().toISOString() };
+        list.push(entry);
+        await writeMediaList(req.body.tenant_id, list);
+
+        return res.json({ status: true, media: list, item: entry });
+    } catch (e) {
+        console.log('customer display media upload failed:', e.message);
+        return res.status(500).json({ status: false, message: 'Upload failed.' });
+    }
+});
+
+router.delete('/customer-display/media/:id', [fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE)], async (req, res) => {
+    try {
+        const list = await readMediaList(req.body.tenant_id);
+        const target = list.find((m) => m.id === req.params.id);
+        const remaining = list.filter((m) => m.id !== req.params.id);
+        await writeMediaList(req.body.tenant_id, remaining);
+        if (target) {
+            const filePath = path.join(__dirname, '../tmp', target.file);
+            try { fs.unlinkSync(filePath); } catch (e) {}
+        }
+        return res.json({ status: true, media: remaining });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: 'Delete failed.' });
+    }
+});
 
 module.exports = router

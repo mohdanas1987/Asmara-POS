@@ -54,18 +54,18 @@ export function WeighItemModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
-        <h2 className="text-lg font-semibold text-neutral-900">{item.name}</h2>
-        <p className="mt-0.5 text-sm text-neutral-500">
+      <div className="w-full max-w-sm rounded-xl bg-surface p-5 shadow-xl">
+        <h2 className="text-lg font-semibold text-ink">{item.name}</h2>
+        <p className="mt-0.5 text-sm text-ink-muted">
           €{parsePrice(item.price).toFixed(2)} per {unit}
         </p>
 
-        <div className="mt-4 rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-center">
-          {scaleAvailable === null && <p className="text-sm text-neutral-400">Checking for a connected scale…</p>}
+        <div className="mt-4 rounded-lg border border-border bg-surface-sunken p-4 text-center">
+          {scaleAvailable === null && <p className="text-sm text-ink-muted">Checking for a connected scale…</p>}
 
           {scaleAvailable === false && (
             <>
-              <p className="mb-2 text-sm text-neutral-500">
+              <p className="mb-2 text-sm text-ink-muted">
                 No scale connected — enter the weight manually.
               </p>
               <input
@@ -77,15 +77,15 @@ export function WeighItemModal({
                 placeholder={`Weight in ${unit}`}
                 value={manualWeight}
                 onChange={(e) => setManualWeight(e.target.value)}
-                className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-center text-lg focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+                className="w-full rounded-lg border border-border px-3 py-2 text-center text-lg focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
               />
             </>
           )}
 
           {scaleAvailable === true && (
             <>
-              <p className="text-3xl font-bold tabular-nums text-neutral-900">
-                {liveWeight !== null ? liveWeight.toFixed(3) : '—.———'} <span className="text-lg font-normal text-neutral-500">{unit}</span>
+              <p className="text-3xl font-bold tabular-nums text-ink">
+                {liveWeight !== null ? liveWeight.toFixed(3) : '—.———'} <span className="text-lg font-normal text-ink-muted">{unit}</span>
               </p>
               <p className={`mt-1 text-xs font-medium ${reading?.stable ? 'text-green-600' : 'text-amber-600'}`}>
                 {reading?.stable === true && 'Stable'}
@@ -97,8 +97,8 @@ export function WeighItemModal({
         </div>
 
         <div className="mt-4 flex items-baseline justify-between text-sm">
-          <span className="text-neutral-600">Line total</span>
-          <span className="text-xl font-semibold text-neutral-900">€{linePrice.toFixed(2)}</span>
+          <span className="text-ink-muted">Line total</span>
+          <span className="text-xl font-semibold text-ink">€{linePrice.toFixed(2)}</span>
         </div>
 
         <div className="mt-5 flex gap-2">

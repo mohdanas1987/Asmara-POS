@@ -12,11 +12,26 @@ import clsx from 'clsx';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 import { useElapsedMinutes } from '@/lib/hooks/useElapsedMinutes';
 
+// Glossy, saturated gradient fills per status (not flat pastel) so the floor reads as
+// colorful/attractive at a glance from across the room, plus a matching glow shadow for a
+// touch of 3D depth -- each table looks like a little polished tile, not a bordered box.
 const STATUS_STYLES: Record<string, string> = {
-  success: 'bg-emerald-100 border-emerald-400 text-emerald-900 dark:bg-emerald-950 dark:border-emerald-700 dark:text-emerald-100',
-  primary: 'bg-blue-100 border-blue-400 text-blue-900 dark:bg-blue-950 dark:border-blue-700 dark:text-blue-100',
-  warning: 'bg-amber-100 border-amber-400 text-amber-900 dark:bg-amber-950 dark:border-amber-700 dark:text-amber-100',
-  danger: 'bg-rose-100 border-rose-400 text-rose-900 dark:bg-rose-950 dark:border-rose-700 dark:text-rose-100',
+  success: 'text-white border-emerald-300/70',
+  primary: 'text-white border-sky-300/70',
+  warning: 'text-white border-amber-300/70',
+  danger: 'text-white border-rose-300/70',
+};
+const STATUS_GRADIENT: Record<string, string> = {
+  success: 'linear-gradient(155deg, #34D399 0%, #059669 60%, #047857 100%)',
+  primary: 'linear-gradient(155deg, #60A5FA 0%, #2563EB 60%, #1D4ED8 100%)',
+  warning: 'linear-gradient(155deg, #FBBF24 0%, #F59E0B 60%, #D97706 100%)',
+  danger: 'linear-gradient(155deg, #FB7185 0%, #E11D48 60%, #BE123C 100%)',
+};
+const STATUS_GLOW: Record<string, string> = {
+  success: '0 6px 16px -4px rgba(5,150,105,0.55)',
+  primary: '0 6px 16px -4px rgba(37,99,235,0.55)',
+  warning: '0 6px 16px -4px rgba(217,119,6,0.55)',
+  danger: '0 6px 16px -4px rgba(190,18,60,0.55)',
 };
 
 export function TableBox({
@@ -81,15 +96,23 @@ export function TableBox({
         top: table.y,
         width: Math.max(table.length, 96),
         height: Math.max(table.width, 72),
+        backgroundImage: STATUS_GRADIENT[table.className] ?? STATUS_GRADIENT.danger,
+        boxShadow: STATUS_GLOW[table.className] ?? STATUS_GLOW.danger,
       }}
       className={clsx(
-        'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 text-sm font-semibold shadow-md transition-shadow hover:shadow-lg',
+        'touch-target relative flex select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 text-sm font-semibold transition-transform hover:-translate-y-0.5 hover:scale-[1.02]',
         selectionMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
         STATUS_STYLES[table.className] ?? STATUS_STYLES.danger,
-        selected && 'ring-2 ring-brand ring-offset-2',
+        selected && 'ring-2 ring-white ring-offset-2 ring-offset-transparent',
         busy && 'opacity-60'
       )}
     >
+      {/* Glossy top highlight -- a soft light streak across the upper third, the classic
+          "polished tile" 3D cue, purely decorative so it never interferes with drag/click. */}
+      <div
+        className="pointer-events-none absolute inset-x-1 top-1 h-1/3 rounded-lg bg-white/25 blur-[2px]"
+        aria-hidden="true"
+      />
       {table.section && (
         <span className="absolute -top-2 left-1 rounded bg-surface px-1 text-[9px] font-normal text-ink-muted shadow-sm">
           {table.section}

@@ -45,7 +45,7 @@ export function HeldCoursesBar({ orderId, refreshKey }: { orderId: string; refre
   return (
     <div className="mb-3 flex flex-wrap gap-2 rounded-xl border border-sky-300 bg-sky-50 px-4 py-2">
       {held.map((h) => (
-        <div key={h.course} className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 shadow-sm">
+        <div key={h.course} className="flex items-center gap-2 rounded-lg bg-surface px-3 py-1.5 shadow-sm">
           <span className="text-sm font-medium capitalize text-sky-900">
             {h.course} holding · {h.items.reduce((sum, i) => sum + i.quantity, 0)} item(s)
           </span>

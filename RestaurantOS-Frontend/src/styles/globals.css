@@ -19,6 +19,7 @@
   --border: 229 231 235; /* neutral-200 */
   --ink: 17 24 39; /* neutral-900 */
   --ink-muted: 107 114 128; /* neutral-500 */
+  --brand-rgb: 15 118 110; /* #0F766E, matches tailwind.config.ts's brand.DEFAULT -- used by the glow shadow/gradient utilities */
 }
 
 .dark {
@@ -29,6 +30,7 @@
   --border: 63 63 70; /* zinc-700 */
   --ink: 244 244 245; /* zinc-100 */
   --ink-muted: 161 161 170; /* zinc-400 */
+  --brand-rgb: 20 184 166; /* brand.light -- glows read better with the lighter teal in dark mode */
 }
 
 body {
@@ -64,4 +66,34 @@ body {
     top: 0;
     width: 100%;
   }
+}
+
+/* Beautification pass (2026-09-22): a slim, theme-aware scrollbar -- the browser default
+ * looks jarring against a designed surface. Webkit-only is fine here; Firefox falls back to
+ * its own default, which is unobtrusive enough on its own. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 999px; border: 2px solid rgb(var(--surface)); }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-muted)); }
+
+/* Shared hover-lift for tappable cards (menu items, tables) -- one definition instead of
+ * every screen re-deriving the same translate+shadow pair. */
+.card-lift {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Touch-flash feedback (beautification pass): every touch-target briefly flashes a bold
+   brand-colored ring/glow when tapped, so a busy floor staff member gets an unmistakable
+   "yes, that registered" cue on a touchscreen -- not just the browser's default tap
+   highlight (which most POS kiosks disable anyway). */
+@keyframes touchFlash {
+  0% { box-shadow: 0 0 0 0 rgb(var(--brand-rgb) / 0.55); }
+  70% { box-shadow: 0 0 0 10px rgb(var(--brand-rgb) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--brand-rgb) / 0); }
+}
+.touch-target:active {
+  animation: touchFlash 0.4s ease-out;
 }

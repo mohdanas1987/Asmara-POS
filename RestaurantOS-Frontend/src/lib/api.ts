@@ -869,3 +869,45 @@ export async function voidPaymentTransaction(transactionId: number) {
     { method: 'POST' }
   );
 }
+
+// ---------------------------------------------------------------------------------------
+// Branding + customer-display media (POS beautification pass): a tenant-wide logo shown in
+// the sidebar/top-bar/login header, and an ordered list of images/videos shown on the
+// customer-facing display screen (idle slideshow + half-screen during checkout).
+// ---------------------------------------------------------------------------------------
+export type CustomerDisplayMediaItem = {
+  id: string;
+  file: string;
+  type: 'image' | 'video';
+  name: string;
+  created_at: string;
+};
+
+export async function getBranding() {
+  return apiFetch<{ status: boolean; logo: string | null }>('/config/branding');
+}
+
+export async function uploadBrandingLogo(file: File) {
+  const form = new FormData();
+  form.append('logo', file);
+  return apiFetchForm<{ status: boolean; logo: string; message?: string }>('/config/branding/logo', form);
+}
+
+export async function getCustomerDisplayMedia() {
+  return apiFetch<{ status: boolean; media: CustomerDisplayMediaItem[] }>('/config/customer-display/media');
+}
+
+export async function uploadCustomerDisplayMedia(file: File) {
+  const form = new FormData();
+  form.append('file', file);
+  return apiFetchForm<{ status: boolean; media: CustomerDisplayMediaItem[]; item: CustomerDisplayMediaItem }>(
+    '/config/customer-display/media',
+    form
+  );
+}
+
+export async function deleteCustomerDisplayMedia(id: string) {
+  return apiFetch<{ status: boolean; media: CustomerDisplayMediaItem[] }>(`/config/customer-display/media/${id}`, {
+    method: 'DELETE',
+  });
+}

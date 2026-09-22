@@ -20,6 +20,7 @@ import { useMenu } from '@/lib/hooks/useMenu';
 import { createCategory, updateItemStock, toggleItemOnPos } from '@/lib/api';
 import { calculateInclusiveTax, parsePrice } from '@/lib/tax';
 import { Button } from '@/components/ui/Button';
+import { TopBar } from '@/components/layout/TopBar';
 import { SearchInput } from '@/components/ui/SearchInput';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
@@ -53,7 +54,7 @@ function ItemThumb({ item }: { item: MenuItem }) {
         <div className="flex h-full w-full items-center justify-center text-3xl">🍽️</div>
       )}
       {item.code && (
-        <span className="absolute right-1.5 top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-ink shadow-sm">
+        <span className="absolute right-1.5 top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-surface/90 px-1 text-[10px] font-bold text-ink shadow-sm">
           #{item.code}
         </span>
       )}
@@ -130,12 +131,12 @@ export default function MenuPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
+    <main className="flex h-screen flex-col">
+      <TopBar title="📖 Menu" />
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-ink">Menu</h1>
-        {/* mr-28: clears the dashboard layout's fixed top-right sync-status pill
-            (DashboardLayout.tsx) -- this page has no TopBar of its own to make room for it. */}
-        <Button className="mr-28" onClick={() => setEditingItem('new')}>+ New item</Button>
+        <p className="text-sm text-ink-muted">Everything on the POS &amp; online menu.</p>
+        <Button onClick={() => setEditingItem('new')}>+ New item</Button>
       </div>
 
       {loading && (
@@ -306,6 +307,7 @@ export default function MenuPage() {
           }}
         />
       )}
+      </div>
     </main>
   );
 }

@@ -49,9 +49,9 @@ export function CartBillDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+      <div className="w-full max-w-sm rounded-xl bg-surface p-5 shadow-xl">
         <div className="mb-1 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-neutral-900">
+          <h2 className="text-lg font-semibold text-ink">
             Bill{tableNumber ? ` — Table #${tableNumber}` : ''}
           </h2>
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
@@ -60,7 +60,7 @@ export function CartBillDialog({
         </div>
 
         <div className="mt-3 max-h-64 divide-y divide-neutral-100 overflow-y-auto">
-          {lines.length === 0 && <p className="py-4 text-sm text-neutral-400">Nothing on this order yet.</p>}
+          {lines.length === 0 && <p className="py-4 text-sm text-ink-muted">Nothing on this order yet.</p>}
           {lines.map((line) => {
             const modifiersTotal = (line.modifiers ?? []).reduce((sum, m) => sum + (Number(m.price_delta) || 0), 0);
             const unitPrice = parsePrice(line.item.price) + modifiersTotal;
@@ -68,31 +68,31 @@ export function CartBillDialog({
             return (
               <div key={line.lineKey ?? String(line.item.id)} className="flex items-center justify-between py-2 text-sm">
                 <div className="min-w-0">
-                  <p className="truncate text-neutral-900">
+                  <p className="truncate text-ink">
                     {typeof line.weight === 'number' ? `${line.weight.toFixed(3)}${line.item.weight_unit || 'kg'}` : `${line.qty}×`} {line.item.name}
                   </p>
                   {line.modifiers && line.modifiers.length > 0 && (
-                    <p className="truncate text-[11px] text-neutral-400">
+                    <p className="truncate text-[11px] text-ink-muted">
                       {line.modifiers.map((m) => m.name).join(', ')}
                     </p>
                   )}
                 </div>
-                <span className="ml-2 shrink-0 text-neutral-600">€{linePrice.toFixed(2)}</span>
+                <span className="ml-2 shrink-0 text-ink-muted">€{linePrice.toFixed(2)}</span>
               </div>
             );
           })}
         </div>
 
-        <div className="mt-3 space-y-0.5 border-t border-neutral-200 pt-3 text-sm">
-          <div className="flex justify-between text-neutral-600">
+        <div className="mt-3 space-y-0.5 border-t border-border pt-3 text-sm">
+          <div className="flex justify-between text-ink-muted">
             <span>Subtotal</span>
             <span>€{subtotal.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between text-neutral-600">
+          <div className="flex justify-between text-ink-muted">
             <span>Tax</span>
             <span>€{tax.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between text-base font-bold text-neutral-900">
+          <div className="flex justify-between text-base font-bold text-ink">
             <span>Total due</span>
             <span>€{total.toFixed(2)}</span>
           </div>

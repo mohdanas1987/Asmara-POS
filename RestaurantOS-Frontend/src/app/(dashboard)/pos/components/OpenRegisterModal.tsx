@@ -32,23 +32,23 @@ export function OpenRegisterModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-2xl bg-surface p-6 shadow-2xl">
         <div className="mb-1 flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand/10 text-lg">💶</span>
-          <h2 className="text-lg font-bold text-neutral-900">Open the register</h2>
+          <h2 className="text-lg font-bold text-ink">Open the register</h2>
         </div>
-        <p className="mt-1 text-sm text-neutral-500">
+        <p className="mt-1 text-sm text-ink-muted">
           No active cash-register session — enter the starting cash amount to begin taking orders.
         </p>
 
-        <label className="mb-1 mt-4 block text-sm font-medium text-neutral-700">Starting cash (€)</label>
+        <label className="mb-1 mt-4 block text-sm font-medium text-ink">Starting cash (€)</label>
         <input
           autoFocus
           inputMode="decimal"
           value={cash}
           onChange={(e) => setCash(e.target.value)}
           placeholder="0.00"
-          className="w-full rounded-lg border border-neutral-300 px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="w-full rounded-lg border border-border px-3 py-2 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
         />
 
         {error && <p className="mt-2 text-sm text-red-600">{error}</p>}

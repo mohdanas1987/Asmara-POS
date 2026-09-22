@@ -8,43 +8,50 @@ import clsx from 'clsx';
 /**
  * Visual pass (owner feedback: dish photos were "getting cut and displaying half only", and
  * the whole POS "looking very basic school project" next to the current production app).
- * Two real, separate problems, both addressed here:
  *
- * 1. The old thumbnail was a fixed 80px-tall strip (`h-20`) with `object-cover` on a
- *    full-width box -- for anything but a very wide, short photo, `object-cover` crops to
- *    fill that box, and most of this menu's real dish photos are much taller than 80px
- *    relative to their width, so the vast majority of each photo (often the actual food)
- *    was being cropped away. Switched to a fixed ASPECT RATIO (`aspect-[4/3]`) that scales
- *    with the card instead of a fixed pixel height, which is what actually stops the crop
- *    from eating the subject -- a wide, shallow box is still `object-cover`, but now the box
- *    itself is shaped like the photos actually are, not like a filmstrip.
- * 2. General density/flatness: bumped image size, added a real card hover/press affordance,
- *    a category chip ON the photo (not a second line of small gray text), a cleaner
- *    price treatment, and slightly heavier shadows/spacing -- closer to how a shelf of
- *    product tiles reads in a real POS than a bare bordered box.
+ * 1. Fixed pixel height, not `aspect-[4/3]` -- inside a CSS Grid cell, Chromium/WebKit fail
+ *    to size an `aspect-ratio` box during the grid's row track-sizing pass (it measures the
+ *    ratio-derived height as 0 before the column width is settled), which collapsed every
+ *    product card down to ~13px tall with everything invisible. A definite height sidesteps
+ *    that entirely.
+ * 2. Uploaded dish photos come in wildly different aspect ratios (portrait phone shots,
+ *    wide landscape crops, near-square). A single `object-contain` image inside a fixed
+ *    box makes every photo look a DIFFERENT size -- a tall photo shrinks to fit the width
+ *    and leaves huge gray bars, a wide photo fills the box -- which is exactly the "some
+ *    are bigger, some are small, looks weird" problem in the All tab. Plain `object-cover`
+ *    fixes the sizing but silently crops the dish out of frame for anything far from the
+ *    box's own ratio (the original "getting cut and displaying half only" complaint).
+ *    Fix: a two-layer thumbnail, the same technique Spotify/YouTube use for mismatched
+ *    cover art -- a blurred, scaled-up `object-cover` copy of the photo fills the ENTIRE
+ *    tile edge-to-edge (so every tile is visually the same size, no gray bars, ever), and
+ *    the real photo sits on top with `object-contain`, centered, fully visible, never
+ *    cropped. Every tile reads as the same size at a glance; every dish photo is intact.
  */
 function ItemThumb({ item }: { item: MenuItem }) {
   const [broken, setBroken] = useState(false);
   return (
-    // NOTE: intentionally a fixed pixel height, not `aspect-[4/3]` -- inside a CSS Grid cell,
-    // Chromium/WebKit fail to size an `aspect-ratio` box during the grid's row track-sizing
-    // pass (it measures the ratio-derived height as 0 before the column width is settled),
-    // which collapsed every product card down to ~13px tall with everything invisible. A
-    // definite height sidesteps that entirely. Paired with `object-contain` (not `cover`) so
-    // the full photo is always visible instead of being cropped -- the original owner
-    // complaint ("getting cut and displaying half only") was `object-cover` on a too-short box.
-    <div className="relative h-36 w-full overflow-hidden rounded-t-xl bg-neutral-100">
+    <div className="relative h-36 w-full overflow-hidden rounded-t-xl bg-surface-sunken">
       {item.image && !broken ? (
-        // Plain <img>, not next/image -- these come from the local backend's own tmp/ folder
-        // (server.local.js's /images static mount), so there's no build-time optimization to
-        // gain and this avoids fighting Next's remote-image allowlist for a purely local host.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={`/images/${item.image}`}
-          alt={item.name}
-          onError={() => setBroken(true)}
-          className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-[1.04]"
-        />
+        <>
+          {/* Blurred backdrop -- always fills the tile edge-to-edge regardless of the
+              source photo's own aspect ratio, so every tile is the same visual size. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/images/${item.image}`}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full scale-110 object-cover object-center blur-md brightness-90"
+          />
+          <div className="absolute inset-0 bg-black/10" aria-hidden="true" />
+          {/* Foreground -- the actual photo, always shown whole and centered, never cropped. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/images/${item.image}`}
+            alt={item.name}
+            onError={() => setBroken(true)}
+            className="relative h-full w-full object-contain object-center drop-shadow-md transition-transform duration-200 group-hover:scale-[1.04]"
+          />
+        </>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-4xl">🍽️</div>
       )}
@@ -102,7 +109,7 @@ export function ProductGrid({
           placeholder="Search items… (or scan a barcode)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 rounded-lg border border-neutral-300 px-3 py-2.5 text-[15px] shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
+          className="flex-1 rounded-lg border border-border bg-surface px-3 py-2.5 text-[15px] text-ink shadow-card transition-shadow focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
         />
       </div>
 
@@ -111,7 +118,7 @@ export function ProductGrid({
           onClick={() => setActiveCategory('all')}
           className={clsx(
             'rounded-full px-4 py-1.5 text-sm font-medium transition-colors',
-            activeCategory === 'all' ? 'bg-brand text-white shadow-sm' : 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300'
+            activeCategory === 'all' ? 'bg-brand-gradient text-white shadow-glow' : 'bg-surface-sunken text-ink-muted hover:bg-border/60'
           )}
         >
           All
@@ -122,7 +129,7 @@ export function ProductGrid({
             onClick={() => setActiveCategory(c.id)}
             className={clsx(
               'rounded-full px-4 py-1.5 text-sm font-medium transition-colors',
-              activeCategory === c.id ? 'bg-brand text-white shadow-sm' : 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300'
+              activeCategory === c.id ? 'bg-brand-gradient text-white shadow-glow' : 'bg-surface-sunken text-ink-muted hover:bg-border/60'
             )}
           >
             {c.name}
@@ -144,22 +151,25 @@ export function ProductGrid({
             <button
               key={item.id}
               onClick={() => (item.sold_by_weight ? onWeigh(item) : onAdd(item))}
-              className="group flex flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand/60 hover:shadow-lg active:translate-y-0 active:scale-[0.98]"
+              className="card-lift group flex animate-fadeInUp flex-col overflow-hidden rounded-xl border border-border bg-surface text-left shadow-card transition-all hover:border-brand/60 hover:shadow-card-hover active:scale-[0.98]"
             >
               <ItemThumb item={item} />
               <div className="flex flex-1 flex-col p-3">
-                <span className="line-clamp-2 text-[15px] font-semibold leading-snug text-neutral-900">{item.name}</span>
+                <span className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink">{item.name}</span>
                 <span className="mt-auto flex items-baseline gap-1 pt-2 text-lg font-bold text-brand">
                   €{parsePrice(item.price).toFixed(2)}
                   {Boolean(item.sold_by_weight) && (
-                    <span className="text-xs font-normal text-neutral-400">/ {item.weight_unit || 'kg'}</span>
+                    <span className="text-xs font-normal text-ink-muted">/ {item.weight_unit || 'kg'}</span>
                   )}
                 </span>
               </div>
             </button>
           ))}
           {filtered.length === 0 && (
-            <p className="col-span-full py-12 text-center text-neutral-400">No items match.</p>
+            <div className="col-span-full flex flex-col items-center gap-2 py-16 text-center text-ink-muted">
+              <span className="text-4xl">🔍</span>
+              <p>No items match.</p>
+            </div>
           )}
         </div>
       </div>

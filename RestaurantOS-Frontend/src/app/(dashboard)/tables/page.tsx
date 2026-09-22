@@ -244,10 +244,18 @@ export default function TablesPage() {
           touching any of the drag/selection logic. */}
       {!loading && !error && (
         <div
-          className="relative flex-1 overflow-auto bg-surface-sunken"
+          className="relative flex-1 overflow-auto"
           style={{
-            backgroundImage: 'radial-gradient(circle, rgba(120,120,120,0.18) 1px, transparent 1px)',
-            backgroundSize: '24px 24px',
+            // A warm herringbone/parquet-style restaurant floor instead of a flat gray
+            // rectangle -- layered diagonal wood-tone stripes plus a faint dot grid (kept
+            // for drag/snap reference) and a soft vignette for depth.
+            backgroundColor: '#3b2a20',
+            backgroundImage:
+              'radial-gradient(circle, rgba(255,255,255,0.09) 1px, transparent 1px), ' +
+              'repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 2px, transparent 2px, transparent 26px), ' +
+              'repeating-linear-gradient(-45deg, rgba(0,0,0,0.12) 0px, rgba(0,0,0,0.12) 2px, transparent 2px, transparent 26px), ' +
+              'linear-gradient(160deg, #5a3f2c 0%, #3b2a20 55%, #2a1d15 100%)',
+            backgroundSize: '24px 24px, 52px 52px, 52px 52px, 100% 100%',
           }}
         >
           <div className="relative" style={{ width: 1000, height: 700 }}>

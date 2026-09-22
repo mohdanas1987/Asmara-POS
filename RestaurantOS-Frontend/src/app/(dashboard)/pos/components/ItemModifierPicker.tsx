@@ -105,12 +105,12 @@ export function ItemModifierPicker({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
-        <h2 className="text-lg font-semibold text-neutral-900">{item.name}</h2>
-        <p className="mt-0.5 text-sm text-neutral-500">Base price €{parsePrice(item.price).toFixed(2)}</p>
+      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-surface p-5 shadow-xl">
+        <h2 className="text-lg font-semibold text-ink">{item.name}</h2>
+        <p className="mt-0.5 text-sm text-ink-muted">Base price €{parsePrice(item.price).toFixed(2)}</p>
 
         {groups === null && !loadError && (
-          <p className="mt-4 text-sm text-neutral-400">Loading options…</p>
+          <p className="mt-4 text-sm text-ink-muted">Loading options…</p>
         )}
         {loadError && (
           <p className="mt-4 text-sm text-red-600">Couldn&apos;t load options for this item. You can still add it plain.</p>
@@ -121,8 +121,8 @@ export function ItemModifierPicker({
             {groups.map((g) => (
               <div key={g.id}>
                 <div className="flex items-baseline justify-between">
-                  <h3 className="text-sm font-semibold text-neutral-800">{g.name}</h3>
-                  <span className="text-xs text-neutral-400">
+                  <h3 className="text-sm font-semibold text-ink">{g.name}</h3>
+                  <span className="text-xs text-ink-muted">
                     {g.required ? 'Required' : 'Optional'}
                     {g.selection_type === 'multiple' && g.max_select ? ` · up to ${g.max_select}` : ''}
                   </span>
@@ -135,7 +135,7 @@ export function ItemModifierPicker({
                       <label
                         key={m.id}
                         className={`flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 text-sm ${
-                          checked ? 'border-brand bg-brand/5' : 'border-neutral-200'
+                          checked ? 'border-brand bg-brand/5' : 'border-border'
                         }`}
                       >
                         <span className="flex items-center gap-2">
@@ -149,7 +149,7 @@ export function ItemModifierPicker({
                           {m.name}
                         </span>
                         {delta !== 0 && (
-                          <span className="text-neutral-500">
+                          <span className="text-ink-muted">
                             {delta > 0 ? '+' : ''}€{delta.toFixed(2)}
                           </span>
                         )}
@@ -163,8 +163,8 @@ export function ItemModifierPicker({
         )}
 
         <div className="mt-4 flex items-baseline justify-between text-sm">
-          <span className="text-neutral-600">Line total</span>
-          <span className="text-xl font-semibold text-neutral-900">€{linePrice.toFixed(2)}</span>
+          <span className="text-ink-muted">Line total</span>
+          <span className="text-xl font-semibold text-ink">€{linePrice.toFixed(2)}</span>
         </div>
 
         <div className="mt-5 flex gap-2">

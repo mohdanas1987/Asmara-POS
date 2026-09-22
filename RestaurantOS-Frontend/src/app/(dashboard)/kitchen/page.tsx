@@ -6,6 +6,7 @@ import { getSocket } from '@/lib/socket';
 import { markOrderPrepared } from '@/lib/api';
 import { OrderRow } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
+import { TopBar } from '@/components/layout/TopBar';
 
 function formatTime(iso: string) {
   try {
@@ -62,20 +63,21 @@ export default function KitchenDisplayPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col p-4">
-      <h1 className="mb-1 flex items-center gap-2 text-xl font-bold text-neutral-900">🍳 Kitchen Display</h1>
-      <p className="mb-4 text-sm text-neutral-500">Live tickets — updates instantly, no refresh needed.</p>
+    <main className="flex h-screen flex-col">
+      <TopBar title="🍳 Kitchen Display" />
+      <div className="flex flex-1 flex-col overflow-hidden p-4">
+      <p className="mb-4 text-sm text-ink-muted">Live tickets — updates instantly, no refresh needed.</p>
 
-      {loading && <p className="text-neutral-400">Loading…</p>}
+      {loading && <p className="text-ink-muted">Loading…</p>}
       {error && <p className="text-red-600">{error}</p>}
 
       {!loading && !error && (
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
           {merged.length === 0 && (
-            <p className="col-span-full py-12 text-center text-neutral-400">No tickets in the kitchen right now.</p>
+            <p className="col-span-full py-12 text-center text-ink-muted">No tickets in the kitchen right now.</p>
           )}
           {merged.map((o) => (
-            <div key={o.id} className="flex flex-col rounded-xl border border-neutral-200 bg-white p-4 shadow-md transition-shadow hover:shadow-lg">
+            <div key={o.id} className="flex flex-col rounded-xl border border-border bg-surface p-4 shadow-md transition-shadow hover:shadow-lg">
               <div className="mb-2 flex items-center justify-between">
                 {o.source === 'online' ? (
                   <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-blue-800">
@@ -86,10 +88,10 @@ export default function KitchenDisplayPage() {
                     {o.tables ? `Table ${o.tables}` : 'Direct sale'}
                   </span>
                 )}
-                <span className="text-xs text-neutral-400">{formatTime(o.created_at)}</span>
+                <span className="text-xs text-ink-muted">{formatTime(o.created_at)}</span>
               </div>
-              {o.note && <p className="mb-2 text-sm text-neutral-700">{o.note}</p>}
-              <p className="mb-3 text-base font-bold text-neutral-900">€{parsePrice(o.total ?? 0).toFixed(2)}</p>
+              {o.note && <p className="mb-2 text-sm text-ink">{o.note}</p>}
+              <p className="mb-3 text-base font-bold text-ink">€{parsePrice(o.total ?? 0).toFixed(2)}</p>
               <button
                 onClick={() => handlePrepared(o)}
                 disabled={busyId === o.id}
@@ -101,6 +103,7 @@ export default function KitchenDisplayPage() {
           ))}
         </div>
       )}
+      </div>
     </main>
   );
 }

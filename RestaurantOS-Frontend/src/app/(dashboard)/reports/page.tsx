@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { TopBar } from '@/components/layout/TopBar';
 import { ReportRow, SalesReportData, TablePerformanceData } from '@/lib/types';
 import {
   generateXReport,
@@ -81,17 +82,16 @@ export default function ReportsPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col gap-6 overflow-y-auto p-4">
+    <main className="flex h-screen flex-col">
+      <TopBar title="📊 Reports" />
+      <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
       <div className="flex items-center justify-between">
-        <h1 className="flex items-center gap-2 text-xl font-bold text-neutral-900">📊 Reports</h1>
-        {/* mr-28: the dashboard layout's global sync-status pill is fixed at top-right
-            (DashboardLayout.tsx) -- this page has no TopBar of its own to make room for it,
-            so without this margin the tab switcher sat directly underneath it. */}
-        <div className="mr-28 flex gap-1 rounded-lg bg-neutral-100 p-1">
+        <p className="text-sm text-ink-muted">Register totals, sales &amp; table performance.</p>
+        <div className="flex gap-1 rounded-lg bg-surface-sunken p-1">
           <button
             onClick={() => setTab('register')}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              tab === 'register' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500'
+              tab === 'register' ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted'
             }`}
           >
             Register (X/Z)
@@ -99,7 +99,7 @@ export default function ReportsPage() {
           <button
             onClick={() => setTab('sales')}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              tab === 'sales' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500'
+              tab === 'sales' ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted'
             }`}
           >
             Sales &amp; Tables
@@ -133,8 +133,8 @@ export default function ReportsPage() {
           </div>
 
           {reportHtml && (
-            <section className="rounded-xl border border-neutral-200 bg-white p-4">
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Latest report</h2>
+            <section className="rounded-xl border border-border bg-surface p-4">
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-muted">Latest report</h2>
               {/* Report HTML is generated server-side by this app's own generateReport() (utils.js)
                   from real order data -- not third-party or user-supplied content. */}
               <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: reportHtml }} />
@@ -142,12 +142,12 @@ export default function ReportsPage() {
           )}
 
           <section>
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Report history</h2>
-            {loading && <p className="text-neutral-400">Loading…</p>}
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-muted">Report history</h2>
+            {loading && <p className="text-ink-muted">Loading…</p>}
             {!loading && (
-              <div className="overflow-auto rounded-xl border border-neutral-200 bg-white">
+              <div className="overflow-auto rounded-xl border border-border bg-surface">
                 <table className="w-full text-left text-sm">
-                  <thead className="bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
+                  <thead className="bg-surface-sunken text-xs uppercase tracking-wide text-ink-muted">
                     <tr>
                       <th className="px-4 py-2">Date</th>
                       <th className="px-4 py-2"></th>
@@ -161,7 +161,7 @@ export default function ReportsPage() {
                           <button onClick={() => setReportHtml(r.html)} className="mr-3 text-sm text-brand hover:underline">
                             View
                           </button>
-                          <button onClick={() => handleDelete(r.id)} className="text-sm text-neutral-400 hover:text-red-600">
+                          <button onClick={() => handleDelete(r.id)} className="text-sm text-ink-muted hover:text-red-600">
                             Delete
                           </button>
                         </td>
@@ -169,7 +169,7 @@ export default function ReportsPage() {
                     ))}
                     {history.length === 0 && (
                       <tr>
-                        <td colSpan={2} className="px-4 py-12 text-center text-neutral-400">
+                        <td colSpan={2} className="px-4 py-12 text-center text-ink-muted">
                           No reports generated yet.
                         </td>
                       </tr>
@@ -183,6 +183,7 @@ export default function ReportsPage() {
       )}
 
       {tab === 'sales' && <SalesAndTablesTab />}
+      </div>
     </main>
   );
 }
@@ -221,18 +222,18 @@ function SalesAndTablesTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white p-3">
-        <label className="flex flex-col text-xs font-medium text-neutral-500">
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-surface p-3">
+        <label className="flex flex-col text-xs font-medium text-ink-muted">
           From
           <input
             type="date"
             value={from}
             max={to}
             onChange={(e) => setFrom(e.target.value)}
-            className="mt-1 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+            className="mt-1 rounded-lg border border-border px-2 py-1.5 text-sm"
           />
         </label>
-        <label className="flex flex-col text-xs font-medium text-neutral-500">
+        <label className="flex flex-col text-xs font-medium text-ink-muted">
           To
           <input
             type="date"
@@ -240,7 +241,7 @@ function SalesAndTablesTab() {
             min={from}
             max={todayISO()}
             onChange={(e) => setTo(e.target.value)}
-            className="mt-1 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+            className="mt-1 rounded-lg border border-border px-2 py-1.5 text-sm"
           />
         </label>
         <Button onClick={load} disabled={loading}>
@@ -265,51 +266,51 @@ function SalesAndTablesTab() {
 
       {sales && (
         <section className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-neutral-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Revenue by day</h2>
-            {sales.byDay.length === 0 && <p className="text-sm text-neutral-400">No paid orders in range.</p>}
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">Revenue by day</h2>
+            {sales.byDay.length === 0 && <p className="text-sm text-ink-muted">No paid orders in range.</p>}
             <div className="flex flex-col gap-1">
               {sales.byDay.map((d) => {
                 const max = Math.max(...sales.byDay.map((x) => x.revenue), 1);
                 return (
                   <div key={d.date} className="flex items-center gap-2 text-sm">
-                    <span className="w-24 shrink-0 text-neutral-500">{d.date}</span>
-                    <div className="h-2 flex-1 rounded bg-neutral-100">
+                    <span className="w-24 shrink-0 text-ink-muted">{d.date}</span>
+                    <div className="h-2 flex-1 rounded bg-surface-sunken">
                       <div className="h-2 rounded bg-brand" style={{ width: `${(d.revenue / max) * 100}%` }} />
                     </div>
-                    <span className="w-20 shrink-0 text-right font-medium text-neutral-700">€{d.revenue.toFixed(2)}</span>
+                    <span className="w-20 shrink-0 text-right font-medium text-ink">€{d.revenue.toFixed(2)}</span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          <div className="rounded-xl border border-neutral-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">By category</h2>
-            {sales.byCategory.length === 0 && <p className="text-sm text-neutral-400">No paid orders in range.</p>}
+          <div className="rounded-xl border border-border bg-surface p-4">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">By category</h2>
+            {sales.byCategory.length === 0 && <p className="text-sm text-ink-muted">No paid orders in range.</p>}
             <div className="flex flex-col gap-2">
               {sales.byCategory
                 .sort((a, b) => b.revenue - a.revenue)
                 .map((c) => (
                   <div key={c.category} className="flex items-center justify-between text-sm">
-                    <span className="text-neutral-700">{c.category}</span>
-                    <span className="font-medium text-neutral-900">€{c.revenue.toFixed(2)}</span>
+                    <span className="text-ink">{c.category}</span>
+                    <span className="font-medium text-ink">€{c.revenue.toFixed(2)}</span>
                   </div>
                 ))}
             </div>
-            <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-neutral-400">Payment methods</h3>
-            <div className="flex gap-4 text-sm text-neutral-700">
+            <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Payment methods</h3>
+            <div className="flex gap-4 text-sm text-ink">
               <span>Cash: €{sales.byPaymentMethod.cash.toFixed(2)}</span>
               <span>Card: €{sales.byPaymentMethod.card.toFixed(2)}</span>
               <span>Account: €{sales.byPaymentMethod.account.toFixed(2)}</span>
             </div>
           </div>
 
-          <div className="rounded-xl border border-neutral-200 bg-white p-4 lg:col-span-2">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Top items</h2>
-            {sales.topItems.length === 0 && <p className="text-sm text-neutral-400">No paid orders in range.</p>}
+          <div className="rounded-xl border border-border bg-surface p-4 lg:col-span-2">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">Top items</h2>
+            {sales.topItems.length === 0 && <p className="text-sm text-ink-muted">No paid orders in range.</p>}
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-neutral-400">
+              <thead className="text-xs uppercase tracking-wide text-ink-muted">
                 <tr>
                   <th className="py-1">Item</th>
                   <th className="py-1 text-right">Qty sold</th>
@@ -331,11 +332,11 @@ function SalesAndTablesTab() {
       )}
 
       {tables && (
-        <section className="rounded-xl border border-neutral-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-500">Table performance</h2>
+        <section className="rounded-xl border border-border bg-surface p-4">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-muted">Table performance</h2>
           <div className="overflow-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-neutral-400">
+              <thead className="text-xs uppercase tracking-wide text-ink-muted">
                 <tr>
                   <th className="py-1">Table</th>
                   <th className="py-1">Section</th>
@@ -347,7 +348,7 @@ function SalesAndTablesTab() {
               </thead>
               <tbody>
                 {tables.tables.map((t) => (
-                  <tr key={t.table} className={`border-t border-neutral-100 ${t.orders === 0 ? 'text-neutral-400' : ''}`}>
+                  <tr key={t.table} className={`border-t border-neutral-100 ${t.orders === 0 ? 'text-ink-muted' : ''}`}>
                     <td className="py-1.5 font-medium">{t.table}</td>
                     <td className="py-1.5">{t.section || '—'}</td>
                     <td className="py-1.5 text-right">{t.orders}</td>
@@ -360,7 +361,7 @@ function SalesAndTablesTab() {
                 ))}
                 {tables.tables.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-neutral-400">
+                    <td colSpan={6} className="py-8 text-center text-ink-muted">
                       No tables found.
                     </td>
                   </tr>
@@ -376,10 +377,10 @@ function SalesAndTablesTab() {
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
-      <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">{label}</p>
+    <div className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-shadow hover:shadow-md">
+      <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">{label}</p>
       <p className="mt-1 text-2xl font-bold text-brand">{value}</p>
-      {hint && <p className="mt-1 text-xs text-neutral-400">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-ink-muted">{hint}</p>}
     </div>
   );
 }

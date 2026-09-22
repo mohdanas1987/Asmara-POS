@@ -7,6 +7,7 @@ import { useOrders } from '@/lib/hooks/useOrders';
 import { getSocket } from '@/lib/socket';
 import { acceptOrder } from '@/lib/api';
 import { OrderRow } from '@/lib/types';
+import { TopBar } from '@/components/layout/TopBar';
 
 function formatDate(iso: string) {
   try {
@@ -40,13 +41,13 @@ export default function OnlineOrdersPage() {
     };
   }, [websiteStatus?.connected]);
 
-  if (statusLoading) return <p className="p-8 text-neutral-400">Checking website connection…</p>;
+  if (statusLoading) return <p className="p-8 text-ink-muted">Checking website connection…</p>;
 
   if (!websiteStatus?.connected) {
     return (
       <main className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center">
-        <h1 className="text-xl font-semibold text-neutral-900">Online Orders is disabled</h1>
-        <p className="max-w-sm text-sm text-neutral-500">
+        <h1 className="text-xl font-semibold text-ink">Online Orders is disabled</h1>
+        <p className="max-w-sm text-sm text-ink-muted">
           Connect your restaurant&apos;s website first — online orders only appear here once
           that connection is live.
         </p>
@@ -82,27 +83,28 @@ export default function OnlineOrdersPage() {
   }
 
   return (
-    <main className="flex h-screen flex-col p-4">
-      <h1 className="mb-1 text-xl font-semibold text-neutral-900">Online Orders</h1>
-      <p className="mb-4 text-sm text-neutral-500">Orders placed through your website, live.</p>
+    <main className="flex h-screen flex-col">
+      <TopBar title="🌐 Online Orders" />
+      <div className="flex flex-1 flex-col overflow-hidden p-4">
+      <p className="mb-4 text-sm text-ink-muted">Orders placed through your website, live.</p>
 
-      {ordersLoading && <p className="text-neutral-400">Loading…</p>}
+      {ordersLoading && <p className="text-ink-muted">Loading…</p>}
       {error && <p className="text-red-600">{error}</p>}
 
       {!ordersLoading && !error && (
         <div className="flex-1 space-y-3 overflow-y-auto">
-          {merged.length === 0 && <p className="py-12 text-center text-neutral-400">No online orders yet.</p>}
+          {merged.length === 0 && <p className="py-12 text-center text-ink-muted">No online orders yet.</p>}
           {merged.map((o) => (
-            <div key={o.id} className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <div key={o.id} className="rounded-xl border border-border bg-surface p-4 shadow-sm">
               <div className="mb-1 flex items-center justify-between">
                 <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-blue-800">
                   Online
                 </span>
-                <span className="text-xs text-neutral-400">{formatDate(o.created_at)}</span>
+                <span className="text-xs text-ink-muted">{formatDate(o.created_at)}</span>
               </div>
-              <p className="text-sm text-neutral-700">{o.note}</p>
+              <p className="text-sm text-ink">{o.note}</p>
               <div className="mt-1 flex items-center justify-between">
-                <p className="font-semibold text-neutral-900">€{Number(o.total).toFixed(2)}</p>
+                <p className="font-semibold text-ink">€{Number(o.total).toFixed(2)}</p>
                 {accepted[o.id] || o.status !== 'ongoing' ? (
                   <span className="text-xs font-medium text-green-600">✓ Sent to kitchen</span>
                 ) : (
@@ -125,6 +127,7 @@ export default function OnlineOrdersPage() {
           {toast}
         </div>
       )}
+      </div>
     </main>
   );
 }
