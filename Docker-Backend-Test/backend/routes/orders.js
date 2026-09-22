@@ -577,7 +577,24 @@ async function linkTablesHandler(req, res) {
 router.get('/link/:tables', fetchuser, linkTablesHandler);
 router.post('/link/:tables', fetchuser, requirePermission(PERMISSIONS.TABLES_MANAGE), linkTablesHandler);
 
-router.get('/init/:table', fetchuser, async (req, res) => {
+// Idempotency (CTO feedback 2026-09-22, items 2/3/11 -- offline order creation's first real
+// prerequisite): a table-open queued while offline (frontend outbox, see
+// RestaurantOS-Frontend/src/lib/offline/outbox.ts) can legitimately be replayed more than
+// once -- the 'online' event and the 20s belt-and-braces poll in useOnlineStatus.ts can both
+// fire a flush, or a flush can be retried after a partial network failure on the response
+// leg. Before this, EVERY replay of /orders/init created a brand-new order and re-flipped
+// the table to "order ongoing" (the .then() cash-register + table-status branch has no
+// dedup at all) -- a cashier who queued "open table 5" offline and got two flush attempts
+// (or two terminals racing to replay the same queued action, unlikely but possible with
+// shared browser storage) could silently get two orders on one table. `idempotent()` uses
+// the SAME reserve-before-run, TTL-reclaim mechanism already hardened for
+// /orders/create, /orders/to-kitchen, /orders/payment-update and /orders/:order/refund
+// (migrations_local/0023, middlewares/idempotent.js) -- a resend with the same
+// idempotency_key returns the exact same {order, status:true} response instead of creating a
+// second order. Requests with no idempotency_key (the existing, already-shipped online
+// "tap a free table" flow) are completely unaffected -- the middleware no-ops when the key is
+// absent.
+router.get('/init/:table', fetchuser, idempotent('orders.init'), async (req, res) => {
     try {
         if ((req.params.table).indexOf('+') === -1) {
             const table = await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', req.params.table).first();
