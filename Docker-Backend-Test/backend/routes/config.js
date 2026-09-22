@@ -139,7 +139,14 @@ router.get(`/settings`, fetchuser, async(req, res) => {
     }
 })
 
-router.get(`/upload-db/:client`, fetchuser, async(req, res) => {
+// RBAC certification (CTO feedback 2026-09-22, item 10 "Full RBAC runtime certification"):
+// this route uploads the ENTIRE backing database file to an external URL, unscoped to any
+// one tenant's data -- before this it only required `fetchuser`, meaning ANY logged-in staff
+// member (a cashier, a waiter) could trigger a full data-store upload to a third-party
+// server. Every other sensitive settings/backup-adjacent action in this same file (branding
+// upload, customer-display media, the daily-reports toggle) already requires
+// `SETTINGS_MANAGE` -- this route was simply missed. Same permission, same pattern.
+router.get(`/upload-db/:client`, fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async(req, res) => {
     try {
 
         const filePath = path.join(__dirname, "../database/db.sqlite");
