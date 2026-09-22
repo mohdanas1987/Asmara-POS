@@ -71,6 +71,7 @@ const loyalty = require('../services/loyaltyService');
 const { recordChange } = require('../services/offline/syncLog');
 const { calculateInclusiveTax } = require('../utils/tax');
 const paymentLedger = require('../services/payments/paymentLedger');
+const billSplit = require('../services/payments/billSplit');
 const requirePermission = require('../middlewares/requirePermission');
 const idempotent = require('../middlewares/idempotent');
 const { PERMISSIONS } = require('../config/permissions');
@@ -899,6 +900,68 @@ router.get('/:order/payments', fetchuser, async (req, res) => {
         return res.json({ status: true, transactions: ledger, netPaid });
     } catch (error) {
         return res.status(500).json({ status: false, message: error.message });
+    }
+});
+
+// Bill splitting, item/seat/percentage modes (CTO feedback 2026-09-22, item 7). Pure
+// computation -- this never charges or records anything. It exists so the client doesn't
+// have to (mis)compute item-assignment or percentage splits itself; the caller takes the
+// returned `shares` and passes them as the `charges` array to the EXISTING, already-tested
+// POST /orders/create or /orders/payment-update (task #49) to actually charge them. See
+// services/payments/billSplit.js's header comment for why item/percentage splitting needed
+// real backend support rather than being left entirely to the frontend.
+router.post('/:order/bill-split/preview', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), async (req, res) => {
+    try {
+        const order = await Order.query().where('tenant_id', req.body.tenant_id).findById(req.params.order);
+        if (!order) {
+            return res.status(404).json({ status: false, message: 'Order not found.' });
+        }
+
+        const { mode } = req.body;
+        let shares;
+        let linesTotalMismatch = null;
+        if (mode === 'even') {
+            shares = billSplit.computeEvenSplit(order.total, Number(req.body.count));
+        } else if (mode === 'percentage') {
+            shares = billSplit.computePercentageSplit(order.total, req.body.shares);
+        } else if (mode === 'items') {
+            let lines = [];
+            try {
+                const data = JSON.parse(order.data || '{}');
+                lines = Array.isArray(data.lines) ? data.lines : [];
+            } catch (_parseErr) {
+                lines = [];
+            }
+            if (lines.length === 0) {
+                return res.status(400).json({ status: false, message: 'This order has no per-line detail to split by item -- use "even" or "percentage" instead.' });
+            }
+            const productIds = [...new Set(lines.map((l) => l.itemId).filter((id) => id !== undefined && id !== null))];
+            const products = productIds.length > 0
+                ? await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', productIds)
+                : [];
+            const productsById = new Map(products.map((p) => [String(p.id), p]));
+            shares = billSplit.computeItemSplit({ lines, products: productsById, assignments: req.body.assignments });
+
+            // Unlike even/percentage (which are computed FROM order.total and therefore
+            // always match it by construction), an item split is computed from the order's
+            // LINE data, which can legitimately differ from order.total (a service charge, a
+            // tip, or a manually-adjusted total that isn't reflected in any line). Surfacing
+            // that as a warning rather than a hard failure -- see billSplit.js's
+            // assertSharesSumToTotal for the strict check used by even/percentage.
+            const linesTotal = shares.reduce((sum, s) => sum + billSplit.toCents(s.amount), 0);
+            if (Math.abs(linesTotal - billSplit.toCents(order.total)) > 1) {
+                linesTotalMismatch = { linesTotal: billSplit.fromCents(linesTotal), orderTotal: order.total };
+            }
+        } else {
+            return res.status(400).json({ status: false, message: 'mode must be "even", "percentage", or "items".' });
+        }
+
+        if (mode !== 'items') {
+            billSplit.assertSharesSumToTotal(shares, order.total);
+        }
+        return res.json({ status: true, order_total: order.total, shares, warning: linesTotalMismatch ? 'Computed item shares do not match the order total -- this order likely has a service charge, tip, or manual adjustment not reflected in its line items.' : null, lines_total_mismatch: linesTotalMismatch });
+    } catch (error) {
+        return res.status(400).json({ status: false, message: error.message });
     }
 });
 
