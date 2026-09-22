@@ -9,6 +9,7 @@ const fetchuser= require('../middlewares/loggedIn');
 const { getCurrentDate } = require("../utils");
 const { logger } = require('../utils/logger');
 const { calculateInclusiveTax } = require('../utils/tax');
+const auditLog = require('../services/auditLog');
 let error = { status : false, message:'Something went wrong!' }
 
 
@@ -121,6 +122,22 @@ router.post('/opening-day-cash-amount', fetchuser, async(req, res) => {
             user_id: req.body.myID,
             tenant_id: req.body.tenant_id
         });
+
+        // Audit event log (CTO feedback 2026-09-22, item 9 "Complete audit-event coverage"):
+        // the opening cash amount is the baseline every later Z-report/shortage calculation
+        // is measured against -- a manipulated opening figure is a straightforward way to
+        // hide a shortage or manufacture a fake overage, and this route had no audit trail at
+        // all before this. Best-effort, matching every other audit call in this codebase.
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'cash_register.open',
+            entityType: 'cash_register',
+            entityId: created.id,
+            payload: { opening_cash: req.body.cash },
+        });
+
         return res.json({ status:true, created, message:"You can now start transactions!" });
 
     } catch (error) {

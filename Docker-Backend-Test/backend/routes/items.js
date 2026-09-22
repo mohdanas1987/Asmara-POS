@@ -21,6 +21,7 @@ const upload = require('../middlewares/multer');
 const { uploadToServer, queueProduct } = require("../utils");
 const { calculateInclusiveTax } = require('../utils/tax');
 const User = require("../models/User");
+const auditLog = require('../services/auditLog');
 
 let error = { status : false, message:'Something went wrong!' }
 
@@ -343,7 +344,41 @@ router.post('/update', [upload.single('uploaded'),fetchuser, requirePermission(P
             body.category_id = req.body.category_id;
             toSync.category = req.body.catName
         }
+
+        // Audit event log (CTO feedback 2026-09-22, item 9 "Complete audit-event coverage"):
+        // a price change is one of the classic POS fraud/error vectors -- a manager (or a
+        // compromised manager account) quietly lowering an item's price, ringing up a
+        // "discount" that was never actually a discount, then pocketing the difference in
+        // cash -- and this route had NO audit trail at all before this. Read the product's
+        // price BEFORE the patch so the log shows the real before/after, not just the new
+        // value (a new value alone can't answer "was this changed, and from what").
+        // Best-effort, same as every other audit call in this codebase: a logging failure
+        // must never block a legitimate price update.
+        let productBeforeUpdate = null;
+        try {
+            productBeforeUpdate = await Product.query().findById(req.body.id).where('tenant_id', req.body.tenant_id);
+        } catch (lookupError) {
+            console.log('[audit-log] non-fatal: could not read product before update', req.body.id, lookupError.message);
+        }
+
         const updated = await Product.query().patchAndFetchById(req.body.id, body).where('tenant_id', req.body.tenant_id);
+
+        if (productBeforeUpdate && String(productBeforeUpdate.price) !== String(body.price)) {
+            auditLog.record({
+                tenantId: req.body.tenant_id,
+                actorUserId: req.body.myID,
+                actorRole: req.authRole,
+                eventType: 'menu_item.price_change',
+                entityType: 'item',
+                entityId: req.body.id,
+                payload: {
+                    name: body.name,
+                    old_price: productBeforeUpdate.price,
+                    new_price: body.price,
+                },
+            });
+        }
+
         const data = typeof queueProduct === 'function'
             ? await queueProduct('/products/update-product', axios, req)
             : (console.warn('[items/update] queueProduct is not defined in utils.js -- skipping (see routes/items.js comment)'), null);
