@@ -25,9 +25,19 @@
  */
 
 const DB_NAME = 'asmara-pos-offline';
-const DB_VERSION = 1;
+// Bumped to 2 (CTO remediation doc, Section 1: "true offline-first new order creation") for
+// the new OFFLINE_ORDERS_STORE below. IndexedDB runs onupgradeneeded automatically for every
+// browser that already has version 1 -- no migration script, no data loss for CACHE_STORE/
+// OUTBOX_STORE (onupgradeneeded only ADDS the new store; it never touches the existing ones).
+const DB_VERSION = 2;
 export const CACHE_STORE = 'cache';
 export const OUTBOX_STORE = 'outbox';
+// Local record of a table/order opened while offline, before the server has ever heard of it
+// (see offlineOrders.ts). Deliberately a SEPARATE store from CACHE_STORE (which only ever
+// holds read-through copies of server data) -- an offline order is locally-authored data that
+// must survive independently of whatever the last successful GET happened to cache, and must
+// never be silently evicted or overwritten by a cache refresh.
+export const OFFLINE_ORDERS_STORE = 'offlineOrders';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -50,6 +60,9 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
           const store = db.createObjectStore(OUTBOX_STORE, { keyPath: 'id', autoIncrement: true });
           store.createIndex('createdAt', 'createdAt');
+        }
+        if (!db.objectStoreNames.contains(OFFLINE_ORDERS_STORE)) {
+          db.createObjectStore(OFFLINE_ORDERS_STORE, { keyPath: 'clientOrderId' });
         }
       };
       req.onsuccess = () => resolve(req.result);

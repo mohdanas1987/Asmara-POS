@@ -765,9 +765,17 @@ export async function setTenantSubscription(
 // the backend (ported from the original app) -- starting an order locks the table (amber),
 // sending to kitchen marks it occupied (red), finishing/cancelling frees it (green).
 
-export async function initTableOrder(tableNumber: string) {
+// Offline table-opening (CTO remediation doc, Section 1): `idempotencyKey`, when provided,
+// is sent as a QUERY PARAM, not a body field -- a real browser's fetch() cannot attach a body
+// to a GET request at all (it throws), unlike supertest, which is why this is a query param
+// and not shaped like every POST idempotency key elsewhere in this file. The backend's
+// idempotent() middleware (middlewares/idempotent.js) accepts it from either place. Passing
+// one lets a queued "open table" outbox action (lib/offline/offlineOrders.ts) be replayed more
+// than once (a flush firing twice) without ever creating a second order for the same table.
+export async function initTableOrder(tableNumber: string, idempotencyKey?: string) {
+  const query = idempotencyKey ? `?idempotency_key=${encodeURIComponent(idempotencyKey)}` : '';
   return apiFetch<{ status: boolean; message?: string; order?: import('./types').Order; table?: import('./types').TableRow }>(
-    `/orders/init/${encodeURIComponent(tableNumber)}`
+    `/orders/init/${encodeURIComponent(tableNumber)}${query}`
   );
 }
 

@@ -30,6 +30,8 @@ import { HeldCoursesBar } from './components/HeldCoursesBar';
 import { CartBillDialog } from './components/CartBillDialog';
 import { enqueueAction } from '@/lib/offline/outbox';
 import { isNetworkError } from '@/lib/offline/network';
+import { isLocalOrderId } from '@/lib/offline/offlineOrders';
+import { removeQueuedActionsForOrder } from '@/lib/offline/outbox';
 import { useOnlineStatus } from '@/lib/hooks/useOnlineStatus';
 
 export default function PosPageWrapper() {
@@ -216,16 +218,13 @@ function PosPage() {
     try {
       const { quantities } = buildQuantities();
       const lines = buildLineDetail();
-      try {
-        await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lines);
-        setLastResult(`Sent to kitchen for table #${table}.`);
-      } catch (err) {
-        // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine network
-        // failure (not the server rejecting the request -- see lib/offline/network.ts) queues
-        // this send instead of losing it. It replays automatically, in order, the moment
-        // connectivity returns (lib/hooks/useOnlineStatus.ts), using the same idempotency key
-        // so a flaky connection retrying the flush can never create a duplicate ticket.
-        if (!isNetworkError(err)) throw err;
+      // True offline-first new order creation (CTO remediation doc, Section 1): a LOCAL order
+      // (this table was opened while offline, see lib/offline/offlineOrders.ts) has no real
+      // server order id yet, even if the network is back right now -- sending straight to
+      // /orders/to-kitchen with a fake id would just 404/500. Every such order MUST go through
+      // the queue, which resolves the real id once the "open table" sync itself lands (see
+      // useOnlineStatus.ts's replay()), never bypass it just because we happen to be online.
+      if (isLocalOrderId(orderId)) {
         await enqueueAction({
           type: 'orders.to-kitchen',
           path: `/orders/to-kitchen/${encodeURIComponent(table)}`,
@@ -233,6 +232,25 @@ function PosPage() {
           label: `Table #${table} -- send to kitchen`,
         });
         setLastResult(`Offline -- queued "send to kitchen" for table #${table}. Will sync automatically.`);
+      } else {
+        try {
+          await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lines);
+          setLastResult(`Sent to kitchen for table #${table}.`);
+        } catch (err) {
+          // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine network
+          // failure (not the server rejecting the request -- see lib/offline/network.ts) queues
+          // this send instead of losing it. It replays automatically, in order, the moment
+          // connectivity returns (lib/hooks/useOnlineStatus.ts), using the same idempotency key
+          // so a flaky connection retrying the flush can never create a duplicate ticket.
+          if (!isNetworkError(err)) throw err;
+          await enqueueAction({
+            type: 'orders.to-kitchen',
+            path: `/orders/to-kitchen/${encodeURIComponent(table)}`,
+            body: { tableNumber: table, orderId, quantities, total: cart.total, lines },
+            label: `Table #${table} -- send to kitchen`,
+          });
+          setLastResult(`Offline -- queued "send to kitchen" for table #${table}. Will sync automatically.`);
+        }
       }
       // Course firing (CTO forensic audit 2026-09-20): a later course may now be sitting
       // held rather than already on the kitchen display -- refresh the held-courses bar.
@@ -252,6 +270,15 @@ function PosPage() {
     if (!confirm(`Cancel this order and free table #${table}?`)) return;
     setActionError(null);
     try {
+      // True offline-first new order creation (CTO remediation doc, Section 1): a LOCAL order
+      // never reached the server at all -- there is nothing to cancel there. Discard the
+      // local record and its queued "open table" action; the table itself was never actually
+      // marked occupied server-side, so there's nothing to free either.
+      if (isLocalOrderId(orderId)) {
+        await removeQueuedActionsForOrder(orderId);
+        router.push('/tables');
+        return;
+      }
       await cancelOrder(orderId, table);
       router.push('/tables');
     } catch (err) {
@@ -290,23 +317,7 @@ function PosPage() {
       const paymentMethodLabel = isSplit ? 'split payment' : method!;
 
       if (isTableOrder && table && orderId) {
-        try {
-          await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lineDetail, idempotencyKey + '-kitchen');
-          await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges, idempotencyKey);
-          await finishOrder(orderId, table);
-          setShowPayment(false);
-          setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
-        } catch (err) {
-          // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine
-          // network failure (not the server rejecting the charge -- see
-          // lib/offline/network.ts) queues the WHOLE checkout (kitchen send + charge +
-          // table-free) as one unit instead of leaving it half-done. It replays in order the
-          // moment connectivity returns; the table is only actually freed once that replay
-          // succeeds, never optimistically here, since the server hasn't recorded the
-          // payment yet. Direct-sale checkout (no table) deliberately has no equivalent path
-          // -- it creates a brand-new order, which needs real multi-terminal reconciliation
-          // this pass doesn't attempt (see lib/offline/db.ts's file header for why).
-          if (!isNetworkError(err)) throw err;
+        const queueCheckout = async () => {
           await enqueueAction({
             type: 'orders.checkout-table',
             path: '',
@@ -324,6 +335,34 @@ function PosPage() {
           });
           setShowPayment(false);
           setLastResult(`Offline -- queued checkout for table #${table} (€${cart.total.toFixed(2)}, ${summaryLabel}). Will sync and free the table automatically.`);
+        };
+
+        // True offline-first new order creation (CTO remediation doc, Section 1): same
+        // reasoning as handleSendToKitchen above -- a LOCAL order has no real server order id
+        // yet, so charging it directly (even if we're online right now) would send a fake id.
+        // It must go through the same queue that resolves the real id once "open table" syncs.
+        if (isLocalOrderId(orderId)) {
+          await queueCheckout();
+        } else {
+          try {
+            await sendTableOrderToKitchen(table, orderId, quantities, cart.total, lineDetail, idempotencyKey + '-kitchen');
+            await chargeOrder(Number(orderId), cart.total, method ?? 'card', splitCharges, idempotencyKey);
+            await finishOrder(orderId, table);
+            setShowPayment(false);
+            setLastResult(`Table #${table} charged €${cart.total.toFixed(2)} (${summaryLabel}) and freed.`);
+          } catch (err) {
+            // Offline-first POS operation (CTO forensic audit 2026-09-21, P0): a genuine
+            // network failure (not the server rejecting the charge -- see
+            // lib/offline/network.ts) queues the WHOLE checkout (kitchen send + charge +
+            // table-free) as one unit instead of leaving it half-done. It replays in order the
+            // moment connectivity returns; the table is only actually freed once that replay
+            // succeeds, never optimistically here, since the server hasn't recorded the
+            // payment yet. Direct-sale checkout (no table) deliberately has no equivalent path
+            // -- it creates a brand-new order, which needs real multi-terminal reconciliation
+            // this pass doesn't attempt (see lib/offline/db.ts's file header for why).
+            if (!isNetworkError(err)) throw err;
+            await queueCheckout();
+          }
         }
         printReceipt({
           tableNumber: table,

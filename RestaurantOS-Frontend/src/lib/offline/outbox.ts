@@ -12,7 +12,7 @@
  */
 import { OUTBOX_STORE, isSupported, requestToPromise, withStore } from './db';
 
-export type QueuedActionType = 'orders.to-kitchen' | 'orders.create' | 'orders.checkout-table';
+export type QueuedActionType = 'orders.to-kitchen' | 'orders.create' | 'orders.checkout-table' | 'orders.init-offline';
 
 export interface QueuedAction {
   id?: number;
@@ -76,6 +76,36 @@ async function removeAction(id: number): Promise<void> {
   await withStore<void>(OUTBOX_STORE, 'readwrite', async (store) => {
     await requestToPromise(store.delete(id));
   });
+}
+
+// Offline order creation (CTO remediation doc, Section 1): when a table opened offline turns
+// out to conflict with the server on sync (another terminal opened the same table in the
+// meantime -- see offlineOrders.ts's markOfflineOrderConflict), every OTHER queued action that
+// was waiting on that same local order id (a queued "send to kitchen" or "checkout") can never
+// be delivered -- there is no server-side order for it to apply to. Rather than leaving them
+// queued forever (silently blocking the whole outbox on every future flush, since flushOutbox
+// stops at the first still-failing action), the caller removes them explicitly and the
+// cashier is shown the conflict so the order can be recreated on a table that's actually
+// free -- a deterministic, visible conflict, not a silently-dropped order.
+export async function removeQueuedActionsForOrder(orderId: string): Promise<number> {
+  const actions = await getQueuedActions();
+  const toRemove = actions.filter((a) => {
+    const body = a.body as Record<string, unknown>;
+    if (!body) return false;
+    // Matches a dependent 'orders.to-kitchen' / 'orders.checkout-table' action (keyed by
+    // `orderId`) AND the order's own 'orders.init-offline' action (keyed by `clientOrderId`,
+    // not `orderId` -- see offlineOrders.ts's createOfflineOrder) so cancelling or
+    // conflict-resolving an offline order clears every trace of it from the queue, not just
+    // its dependents.
+    return body.orderId === orderId || body.clientOrderId === orderId;
+  });
+  for (const action of toRemove) {
+    if (action.id !== undefined) {
+      // eslint-disable-next-line no-await-in-loop
+      await removeAction(action.id);
+    }
+  }
+  return toRemove.length;
 }
 
 async function updateAction(id: number, patch: Partial<QueuedAction>): Promise<void> {

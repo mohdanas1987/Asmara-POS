@@ -5,6 +5,8 @@ import { getTables, updateTablePosition, transferTable, assignTableServer, freeA
 import { getTerminalId } from '@/lib/terminal';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 import { loadWithCache } from '@/lib/offline/cache';
+import { isNetworkError } from '@/lib/offline/network';
+import { createOfflineOrder } from '@/lib/offline/offlineOrders';
 
 export function useTables() {
   const [tables, setTables] = useState<TableRow[]>([]);
@@ -134,14 +136,28 @@ export function useTables() {
   // on it (looked up from GET /orders/'s tableOrders map -- no guessing, no separate fetch).
   // Returns the table number + order id the caller should navigate the POS screen to.
   const openTable = useCallback(
-    async (table: TableRow): Promise<{ tableNumber: string; orderId: number }> => {
+    async (table: TableRow): Promise<{ tableNumber: string; orderId: number | string }> => {
       if (table.status === 'free') {
-        const res = await initTableOrder(table.table_number);
-        if (!res.status || !res.order) {
-          throw new Error(res.message || 'Could not start an order on this table.');
+        try {
+          const res = await initTableOrder(table.table_number);
+          if (!res.status || !res.order) {
+            throw new Error(res.message || 'Could not start an order on this table.');
+          }
+          await refresh();
+          return { tableNumber: table.table_number, orderId: res.order.id };
+        } catch (err) {
+          // True offline-first new order creation (CTO remediation doc, Section 1): a genuine
+          // network failure (not the server telling us the table isn't actually free -- see
+          // lib/offline/network.ts) falls back to a LOCAL placeholder order instead of leaving
+          // the cashier stuck with "table is offline, cannot be used." The local order is
+          // queued for real sync the moment connectivity returns (offlineOrders.ts); every
+          // downstream action (add items, send to kitchen, checkout) already queues offline
+          // too, unchanged by this fallback. `refresh()` is skipped here on purpose -- there
+          // is no network to refresh FROM, and the cached table list already shown is what
+          // this whole fallback is trusting to still be accurate.
+          if (!isNetworkError(err)) throw err;
+          return createOfflineOrder({ tableNumber: table.table_number });
         }
-        await refresh();
-        return { tableNumber: table.table_number, orderId: res.order.id };
       }
       const existing = tableOrders[table.table_number];
       if (!existing) {
