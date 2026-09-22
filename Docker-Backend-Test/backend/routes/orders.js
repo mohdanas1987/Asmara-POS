@@ -77,6 +77,7 @@ const { PERMISSIONS } = require('../config/permissions');
 const { snapshotOrderLines } = require('../services/orderLineSnapshot');
 const { validateAndPriceLines, ModifierValidationError } = require('../services/modifierValidation');
 const auditLog = require('../services/auditLog');
+const { recordStatusChangeSafe, recordTableEventSafe } = require('../services/orderHistory');
 
 // Billing & payments completeness (task #37): both /create and /payment-update accept a
 // `modes` object shaped like { cash: 12.50 } or { card: 12.50 }, or (for the app's existing,
@@ -180,10 +181,29 @@ router.get('/', fetchuser, async (req, res) => {
 // frontend; a POST alias is added as the correct-verb replacement for future use.
 async function cancelOrderHandler(req, res) {
     try {
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): capture the
+        // pre-delete status so the void is recorded in order_status_history. Best-effort --
+        // must never block the actual cancellation below.
+        let orderBeforeDelete = null;
+        try {
+            orderBeforeDelete = await Order.query().findById(req.params.order).where('tenant_id', req.body.tenant_id);
+        } catch (lookupError) {
+            console.log('[orderHistory] non-fatal: could not read order before cancel', req.params.order, lookupError.message);
+        }
+
         const deleted = await Order.query().deleteById(req.params.order).where('tenant_id', req.body.tenant_id);
 
         await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', req.params.table.split("+")).patch({
             status: "free"
+        });
+
+        recordStatusChangeSafe({
+            tenantId: req.body.tenant_id,
+            orderId: req.params.order,
+            fromStatus: orderBeforeDelete ? orderBeforeDelete.status : null,
+            toStatus: 'cancelled',
+            reason: 'cancel',
+            userId: req.body.myID,
         });
 
         // Audit event log (CTO forensic audit 2026-09-21, P1 "Complete audit-event
@@ -225,9 +245,29 @@ router.post('/cancel/:order/:table', fetchuser, requirePermission(PERMISSIONS.OR
 async function finishOrderHandler(req, res) {
     try {
 
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): capture the
+        // pre-patch status before it's overwritten, so the history row shows a real
+        // fromStatus -> 'completed' transition rather than just the end state.
+        let previousStatus = null;
+        try {
+            const orderBeforeFinish = await Order.query().findById(req.params.order).where('tenant_id', req.body.tenant_id);
+            previousStatus = orderBeforeFinish ? orderBeforeFinish.status : null;
+        } catch (lookupError) {
+            console.log('[orderHistory] non-fatal: could not read order before finish', req.params.order, lookupError.message);
+        }
+
         const order = await Order.query().patchAndFetchById(req.params.order, {
             status: "completed"
         }).where('tenant_id', req.body.tenant_id);
+
+        recordStatusChangeSafe({
+            tenantId: req.body.tenant_id,
+            orderId: req.params.order,
+            fromStatus: previousStatus,
+            toStatus: 'completed',
+            reason: 'finish',
+            userId: req.body.myID,
+        });
 
         const tables = req.params.table.indexOf('+') === -1 ? [req.params.table] : req.params.table.split('+');
 
@@ -350,8 +390,14 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
         // see the snapshotOrderLines call after paymentLedger.recordCharges below.
         let preChargeLines = null;
         let preChargeQuantity = null;
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): also hoisted
+        // out to record the pre-charge payment_status once the charge actually lands below.
+        let previousPaymentStatus = null;
         if (req.body.order_id) {
             const orderBeforeCharge = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id);
+            if (orderBeforeCharge) {
+                previousPaymentStatus = orderBeforeCharge.payment_status;
+            }
             if (orderBeforeCharge && orderBeforeCharge.data) {
                 try {
                     const parsed = JSON.parse(orderBeforeCharge.data);
@@ -437,6 +483,19 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
         const netPaid = await paymentLedger.getNetPaid({ tenantId: req.body.tenant_id, orderId: order.id });
         const derivedStatus = paymentLedger.deriveStatus(netPaid, order.total);
         order = await Order.query().patchAndFetchById(order.id, { payment_status: derivedStatus }).where('tenant_id', req.body.tenant_id);
+
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): record the
+        // payment_status transition only when it actually changed.
+        if (previousPaymentStatus !== derivedStatus) {
+            recordStatusChangeSafe({
+                tenantId: req.body.tenant_id,
+                orderId: order.id,
+                fromStatus: previousPaymentStatus,
+                toStatus: derivedStatus,
+                reason: 'orders.create:payment_status',
+                userId: req.body.myID,
+            });
+        }
 
         if (req.body.data) {
             // Cash-register accounting fix (CTO forensic audit 2026-09-21, "serious
@@ -557,6 +616,26 @@ router.get('/init/:table', fetchuser, async (req, res) => {
             status: "order ongoing"
         });
 
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): this is the
+        // real "order opened on a table" event -- record both the initial status and the
+        // initial table assignment as the first rows in each history table.
+        recordStatusChangeSafe({
+            tenantId: req.body.tenant_id,
+            orderId: order.id,
+            fromStatus: null,
+            toStatus: order.status,
+            reason: 'init',
+            userId: req.body.myID,
+        });
+        recordTableEventSafe({
+            tenantId: req.body.tenant_id,
+            orderId: order.id,
+            fromTable: null,
+            toTable: req.params.table,
+            eventType: 'open',
+            userId: req.body.myID,
+        });
+
         return res.json({ order, status: true });
 
     } catch (err) {
@@ -641,6 +720,21 @@ router.post('/to-kitchen/:table?', fetchuser, requirePermission(PERMISSIONS.ORDE
             if (order.tables) {
                 const tables = order.tables ? [order.tables] : order.tables.split('+');
                 await Table.query().where('tenant_id', req.body.tenant_id).whereIn('table_number', tables).patch({ status: "occupied" });
+            }
+
+            // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): record
+            // the status transition only when it actually changed (a quantity-only update to
+            // an already in-kitchen order keeps the same status and shouldn't produce a
+            // no-op history row).
+            if (previousOrder.status !== order.status) {
+                recordStatusChangeSafe({
+                    tenantId: req.body.tenant_id,
+                    orderId: order.id,
+                    fromStatus: previousOrder.status,
+                    toStatus: order.status,
+                    reason: 'to-kitchen',
+                    userId: req.body.myID,
+                });
             }
         } else {
             order = await Order.query().insertAndFetch({ ...payload, note: "From direct sale.", tenant_id: req.body.tenant_id, version: 1 });
@@ -751,6 +845,19 @@ router.post('/payment-update', fetchuser, requirePermission(PERMISSIONS.ORDERS_C
             updated_at: europeanDate(),
             data: modes
         }).where('tenant_id', req.body.tenant_id);
+
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): record the
+        // payment_status transition only when it actually changed.
+        if (existingOrder.payment_status !== derivedStatus) {
+            recordStatusChangeSafe({
+                tenantId: req.body.tenant_id,
+                orderId: order.id,
+                fromStatus: existingOrder.payment_status,
+                toStatus: derivedStatus,
+                reason: 'payment-update',
+                userId: req.body.myID,
+            });
+        }
 
         // Cash-register accounting fix (CTO forensic audit 2026-09-21, "serious cash-register
         // accounting issue"): this route records charges into the same payment ledger /create

@@ -9,6 +9,7 @@ const { recordChange } = require('../services/offline/syncLog');
 const requirePermission = require('../middlewares/requirePermission');
 const { PERMISSIONS } = require('../config/permissions');
 const auditLog = require('../services/auditLog');
+const { recordTableEventSafe } = require('../services/orderHistory');
 const { body, validationResult } = require('express-validator');
 const router = express.Router();
 
@@ -122,6 +123,17 @@ async function splitTableHandler(req, res) {
                 // no other change to be picked up correctly).
                 await Order.query().patchAndFetchById(order.id, { tables: keepOn }).where('tenant_id', req.body.tenant_id);
                 await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', keepOn).patch({ status: 'occupied' });
+
+                // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8):
+                // record the surviving order's table reassignment from the split.
+                recordTableEventSafe({
+                    tenantId: req.body.tenant_id,
+                    orderId: order.id,
+                    fromTable: tableNumber,
+                    toTable: keepOn,
+                    eventType: 'split',
+                    userId: req.body.myID,
+                });
             } else {
                 await Table.query().where('tenant_id', req.body.tenant_id).where('table_number', keepOn).patch({ status: 'free' });
             }
@@ -323,6 +335,17 @@ router.post('/transfer', fetchuser, requirePermission(PERMISSIONS.TABLES_TRANSFE
 
         logger.info('table.transfer', { from_table, to_table, order_id: result.id, user_id: req.body.myID });
 
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): record the
+        // whole-order table transfer.
+        recordTableEventSafe({
+            tenantId,
+            orderId: result.id,
+            fromTable: from_table,
+            toTable: to_table,
+            eventType: 'transfer',
+            userId: req.body.myID,
+        });
+
         auditLog.record({
             tenantId,
             actorUserId: req.body.myID,
@@ -499,6 +522,19 @@ router.post('/transfer-items', fetchuser, requirePermission(PERMISSIONS.TABLES_T
             from_table, to_table,
             source_order_id: result.sourceOrder.id, new_order_id: result.newOrder.id,
             moved_line_count: line_indexes.length, user_id: req.body.myID,
+        });
+
+        // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): the moved
+        // lines land on a brand-new order record on the destination table -- record that as
+        // the new order's table-opening event (analogous to /orders/init's 'open', but
+        // originating from an item-level transfer rather than a fresh seating).
+        recordTableEventSafe({
+            tenantId: req.body.tenant_id,
+            orderId: result.newOrder.id,
+            fromTable: from_table,
+            toTable: to_table,
+            eventType: 'transfer',
+            userId: req.body.myID,
         });
 
         auditLog.record({
