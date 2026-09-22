@@ -394,10 +394,32 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
         // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): also hoisted
         // out to record the pre-charge payment_status once the charge actually lands below.
         let previousPaymentStatus = null;
+        // Optimistic locking, extended to charging (CTO feedback 2026-09-22, item 12: "Order/
+        // table concurrency" -- previously only /orders/to-kitchen checked `version` at all).
+        // This is the SAME real lost-update race as that route's own comment describes, just
+        // on the charge/payment side: two terminals charging the same table order concurrently
+        // (e.g. a cashier retries a slow charge while a manager is simultaneously voiding/
+        // adjusting the same order) can each read a stale `version`, and whichever PATCH lands
+        // second would otherwise silently overwrite the other's write with no one ever told.
+        // OPTIONAL, exactly like /orders/to-kitchen -- a caller that never sends
+        // `expected_version` (every existing frontend call today) behaves completely
+        // unchanged.
+        let orderVersionForPatch = null;
         if (req.body.order_id) {
             const orderBeforeCharge = await Order.query().findById(req.body.order_id).where('tenant_id', req.body.tenant_id);
             if (orderBeforeCharge) {
                 previousPaymentStatus = orderBeforeCharge.payment_status;
+                orderVersionForPatch = Number(orderBeforeCharge.version ?? 1);
+                if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
+                    if (Number(req.body.expected_version) !== orderVersionForPatch) {
+                        return res.status(409).json({
+                            status: false,
+                            conflict: true,
+                            message: 'This order was updated by another terminal. Refresh and try again.',
+                            order: orderBeforeCharge,
+                        });
+                    }
+                }
             }
             if (orderBeforeCharge && orderBeforeCharge.data) {
                 try {
@@ -440,6 +462,10 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
 
         if(req.body.extra) {
             payload.added_total = null
+        }
+
+        if (orderVersionForPatch !== null) {
+            payload.version = orderVersionForPatch + 1;
         }
 
         let order = await Order.query().patchAndFetchById(req.body.order_id, payload).where('tenant_id', req.body.tenant_id);
@@ -840,6 +866,23 @@ router.post('/payment-update', fetchuser, requirePermission(PERMISSIONS.ORDERS_C
             return res.json({ status: false, message: "Order not found." });
         }
 
+        // Optimistic locking (CTO feedback 2026-09-22, item 12: "Order/table concurrency"),
+        // same optional expected_version contract as /orders/to-kitchen and /orders/create --
+        // this route patches the order's `data`/`payment_status` directly, so two concurrent
+        // payment-update calls on the same order (e.g. finishing a split payment from two
+        // terminals) have the exact same silent-overwrite risk. A caller that never sends
+        // `expected_version` is completely unaffected.
+        if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
+            if (Number(req.body.expected_version) !== Number(existingOrder.version ?? 1)) {
+                return res.status(409).json({
+                    status: false,
+                    conflict: true,
+                    message: 'This order was updated by another terminal. Refresh and try again.',
+                    order: existingOrder,
+                });
+            }
+        }
+
         // Bill splitting (task #49): same precedence rule as /create above -- an itemized
         // `charges` array, when present, is the sole source of truth (never summed together
         // with the modes-derived charge, which would double-count the same payment).
@@ -861,7 +904,8 @@ router.post('/payment-update', fetchuser, requirePermission(PERMISSIONS.ORDERS_C
         const order = await Order.query().patchAndFetchById(req.body.order_id, {
             payment_status: derivedStatus,
             updated_at: europeanDate(),
-            data: modes
+            data: modes,
+            version: Number(existingOrder.version ?? 1) + 1,
         }).where('tenant_id', req.body.tenant_id);
 
         // Order domain normalization phase 2 (CTO feedback 2026-09-22, item 8): record the
