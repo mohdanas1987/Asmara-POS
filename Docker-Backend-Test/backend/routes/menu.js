@@ -2,6 +2,12 @@ const express = require("express");
 const router = express.Router();
 
 const fetchuser= require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// creating/editing/removing/toggling a menu category previously required only fetchuser --
+// any logged-in role (including kitchen) could restructure the menu. Gated behind
+// MENU_MANAGE, the same permission menu items and modifier groups already use.
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 const { getRandomHexColor } = require("../utils");
 const MenuCategory = require("../models/MenuCategory");
 
@@ -24,7 +30,7 @@ router.get('/', fetchuser, async (req,res) => {
 });
 
 // Route 3 : Get logged in user details - login required
-router.post('/create', fetchuser, async(req, res) => {
+router.post('/create', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), async(req, res) => {
     try {
         const category = await MenuCategory.query().insert({
             name: req.body.name,
@@ -40,7 +46,7 @@ router.post('/create', fetchuser, async(req, res) => {
     }
 });
 
-router.post('/update', fetchuser, async(req, res) => {
+router.post('/update', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), async(req, res) => {
     try {
         // return res.json({req: req.body})
         await MenuCategory.query().findById(req.body.id).where('tenant_id', req.body.tenant_id).patch({
@@ -72,7 +78,7 @@ async function removeCategoryHandler(req, res) {
     }
 }
 router.get('/remove/:id', fetchuser, removeCategoryHandler);
-router.delete('/remove/:id', fetchuser, removeCategoryHandler);
+router.delete('/remove/:id', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), removeCategoryHandler);
 
 // STAGE 2 / phase 18 + 19: was unauthenticated (this toggles a menu category on/off across
 // the whole POS — a real operational mutation). PATCH alias added for the verb fix.
@@ -93,7 +99,7 @@ async function toggleCategoryHandler(req, res) {
     }
 }
 router.get('/toggle/:id/:status', fetchuser, toggleCategoryHandler);
-router.patch('/toggle/:id/:status', fetchuser, toggleCategoryHandler);
+router.patch('/toggle/:id/:status', fetchuser, requirePermission(PERMISSIONS.MENU_MANAGE), toggleCategoryHandler);
 
 // STAGE 2 / phase 18: was unauthenticated — recolors every category in the system.
 router.get('/fill-color', fetchuser, async(req,res) => {

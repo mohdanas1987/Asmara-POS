@@ -7,7 +7,7 @@
  * the transfer and free-all actions this screen already had. One `mode` state drives which
  * action tapping a table performs, rather than layering more one-off click handlers.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTables } from '@/lib/hooks/useTables';
 import { useMenu } from '@/lib/hooks/useMenu';
@@ -15,13 +15,14 @@ import { Button } from '@/components/ui/Button';
 import { TopBar } from '@/components/layout/TopBar';
 import { TableBox } from './components/TableBox';
 import { BillPreviewDialog } from './components/BillPreviewDialog';
-import { TableRow } from '@/lib/types';
+import { TableRow, StaffMember } from '@/lib/types';
+import { listStaff } from '@/lib/api';
 
 type Mode = 'view' | 'transfer' | 'merge' | 'free-selected';
 
 export default function TablesPage() {
   const router = useRouter();
-  const { tables, tableOrders, loading, error, moveTable, transfer, freeAll, freeSelected, merge, split, openTable } = useTables();
+  const { tables, tableOrders, loading, error, moveTable, transfer, assignServer, freeAll, freeSelected, merge, split, openTable } = useTables();
   const { items: menuItems } = useMenu();
 
   const [mode, setMode] = useState<Mode>('view');
@@ -31,8 +32,43 @@ export default function TablesPage() {
   // Table split (CTO forensic audit 2026-09-20): the table whose merged-group split is being
   // confirmed -- opens a small "which table keeps the bill" chooser rather than guessing.
   const [splitTableRow, setSplitTableRow] = useState<TableRow | null>(null);
+  // Seat / server assignment (CTO forensic audit 2026-09-21, P1): the table currently being
+  // assigned a server, and the staff list to pick from (loaded once -- this screen doesn't
+  // need it to stay live-updated, just accurate enough to assign against).
+  const [assignServerTable, setAssignServerTable] = useState<TableRow | null>(null);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    listStaff()
+      .then((res) => {
+        if (res.status) setStaff(res.staff);
+      })
+      .catch(() => {
+        // Non-fatal: the assign-server picker just shows no names if this fails, same
+        // "degrade, don't break the floor plan" approach as everything else on this screen.
+      });
+  }, []);
+
+  function staffNameFor(serverId: number | null | undefined): string | null {
+    if (serverId == null) return null;
+    return staff.find((s) => s.id === serverId)?.name ?? null;
+  }
+
+  async function handleAssignServer(serverId: number | null) {
+    if (!assignServerTable) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await assignServer(assignServerTable.table_number, serverId);
+      setAssignServerTable(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not assign server.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const transferFromTable = tables.find((t) => t.table_number === transferFrom) ?? null;
   const freeTables = tables.filter((t) => t.status === 'free' && t.table_number !== transferFrom);
@@ -223,6 +259,7 @@ export default function TablesPage() {
                   selected={mode === 'transfer' ? transferFrom === t.table_number : selectedTables.includes(t.table_number)}
                   selectionMode={selectionMode}
                   busy={busy}
+                  serverName={staffNameFor(t.assigned_server_id)}
                   onMove={(x, y) => moveTable(t.table_number, x, y)}
                   onClick={() => (mode === 'transfer' && transferFrom ? undefined : handleTableClick(t))}
                   onTransferClick={
@@ -231,6 +268,14 @@ export default function TablesPage() {
                           setActionError(null);
                           setMode('transfer');
                           setTransferFrom(t.table_number);
+                        }
+                      : undefined
+                  }
+                  onAssignServerClick={
+                    mode === 'view'
+                      ? () => {
+                          setActionError(null);
+                          setAssignServerTable(t);
                         }
                       : undefined
                   }
@@ -310,6 +355,43 @@ export default function TablesPage() {
             <button
               disabled={busy}
               onClick={() => setSplitTableRow(null)}
+              className="touch-target rounded-lg px-3 text-sm text-ink-muted hover:text-ink disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {assignServerTable && (
+        <div className="fixed bottom-4 left-1/2 w-full max-w-md -translate-x-1/2 rounded-xl border border-border bg-surface-raised p-4 shadow-lg">
+          <p className="mb-2 text-sm font-medium text-ink">
+            Assign a server to table #{assignServerTable.table_number}:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {staff.length === 0 && <p className="text-sm text-ink-muted">No staff found.</p>}
+            {staff.map((s) => (
+              <button
+                key={s.id}
+                disabled={busy}
+                onClick={() => handleAssignServer(s.id)}
+                className="touch-target rounded-lg border border-border px-3 text-sm hover:border-brand hover:text-brand disabled:opacity-50"
+              >
+                {s.name}
+              </button>
+            ))}
+            {assignServerTable.assigned_server_id != null && (
+              <button
+                disabled={busy}
+                onClick={() => handleAssignServer(null)}
+                className="touch-target rounded-lg px-3 text-sm text-ink-muted hover:text-ink disabled:opacity-50"
+              >
+                Clear assignment
+              </button>
+            )}
+            <button
+              disabled={busy}
+              onClick={() => setAssignServerTable(null)}
               className="touch-target rounded-lg px-3 text-sm text-ink-muted hover:text-ink disabled:opacity-50"
             >
               Cancel

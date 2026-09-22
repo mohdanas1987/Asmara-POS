@@ -1,27 +1,65 @@
 'use client';
 
 /**
- * Bill splitting (task #49): adds an optional "Split bill" mode alongside the existing
- * single-method flow, which is completely unchanged (same props shape still works -- see
- * onConfirm's first overload). Splitting only supports dividing the total across payment
- * charges (by method, evenly or by custom amount) -- splitting by specific menu item or by
- * seat would need each order line tagged with who it belongs to, which the order schema
- * doesn't carry today; that's a bigger, separate schema change, not something to fake here.
+ * Bill splitting (task #49, extended CTO forensic audit 2026-09-21 "Bill splitting is NOT
+ * complete"): the original version only supported splitting by arbitrary amount. This adds
+ * two more ways to split, on top of that one -- all three ultimately produce the exact same
+ * `charges: SplitCharge[]` shape the backend already accepts (see routes/orders.js's
+ * chargesFromArray), so no backend schema change was needed for amount/percentage splitting.
+ *
+ * - "Amount": unchanged -- manually type each payer's amount (evenly divided as a starting
+ *   point, editable per payer).
+ * - "Percentage": each payer gets a % of the total instead of a raw amount; percentages must
+ *   sum to 100, and the resulting cent-exact amounts are computed the same rounding-safe way
+ *   as the even-split default (no silently over/under-charging by a cent).
+ * - "By item": each cart LINE (not sub-quantity -- see the note below) is assigned to one
+ *   payer; a payer's amount is the sum of their assigned lines' prices (including any
+ *   modifier price deltas), and every line must be assigned before charging is allowed.
+ *   KNOWN LIMITATION, stated plainly rather than faked: splitting a single line with qty > 1
+ *   across two DIFFERENT payers (e.g. one of two identical burgers goes to each of two
+ *   people) isn't supported -- the whole line goes to one payer. Bump the quantity down to 1
+ *   per line before charging (two separate lines) if that's needed; a full seat/quantity-unit
+ *   assignment model is a larger feature (see the P1 "seat assignment" tracker item).
  */
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { SplitCharge } from '@/lib/api';
+import { CartLine } from '@/lib/types';
+import { parsePrice } from '@/lib/tax';
 
 type ConfirmPayload = { method: 'cash' | 'card' } | { charges: SplitCharge[] };
+type SplitBy = 'amount' | 'percentage' | 'item';
+
+function lineTotal(line: CartLine): number {
+  const modifiersTotal = (line.modifiers ?? []).reduce((sum, m) => sum + (Number(m.price_delta) || 0), 0);
+  const unitPrice = parsePrice(line.item.price) + modifiersTotal;
+  return unitPrice * (line.weight ?? line.qty);
+}
+
+function lineLabel(line: CartLine): string {
+  const qtyLabel = typeof line.weight === 'number' ? `${line.weight.toFixed(3)}${line.item.weight_unit || 'kg'}` : `${line.qty}×`;
+  return `${qtyLabel} ${line.item.name}`;
+}
+
+// Distribute `amount` across `count` shares in whole cents so they always sum EXACTLY to the
+// total -- naive division can leave a rounding remainder that silently under/over-charges.
+function distributeEvenly(amount: number, count: number): number[] {
+  const totalCents = Math.round(amount * 100);
+  const base = Math.floor(totalCents / count);
+  const remainder = totalCents - base * count;
+  return Array.from({ length: count }, (_, i) => (base + (i < remainder ? 1 : 0)) / 100);
+}
 
 export function PaymentModal({
   total,
+  lines = [],
   onClose,
   onConfirm,
   submitting = false,
   error = null,
 }: {
   total: number;
+  lines?: CartLine[];
   onClose: () => void;
   onConfirm: (payload: ConfirmPayload) => void;
   submitting?: boolean;
@@ -29,53 +67,96 @@ export function PaymentModal({
 }) {
   const [method, setMethod] = useState<'cash' | 'card'>('card');
   const [splitMode, setSplitMode] = useState(false);
+  const [splitBy, setSplitBy] = useState<SplitBy>('amount');
   const [splitCount, setSplitCount] = useState(2);
-  const [shares, setShares] = useState<SplitCharge[]>(() => buildEvenShares(total, 2));
+  const [shares, setShares] = useState<SplitCharge[]>(() =>
+    distributeEvenly(total, 2).map((amount) => ({ method: 'card' as const, amount }))
+  );
+  const [percentages, setPercentages] = useState<number[]>([50, 50]);
+  const [percentMethods, setPercentMethods] = useState<Array<'cash' | 'card'>>(['card', 'card']);
+  // itemAssignments[lineKey] = payer index (0-based), or undefined if unassigned yet.
+  const [itemAssignments, setItemAssignments] = useState<Record<string, number>>({});
+  const [itemMethods, setItemMethods] = useState<Array<'cash' | 'card'>>(['card', 'card']);
 
-  function buildEvenShares(amount: number, count: number): SplitCharge[] {
-    // Distribute in whole cents so the shares always sum EXACTLY to the total -- naive
-    // division (amount / count) can leave a rounding remainder that silently under- or
-    // over-charges by a cent, which is exactly the kind of "small" pricing bug this app has
-    // already shipped twice this session.
-    const totalCents = Math.round(amount * 100);
-    const base = Math.floor(totalCents / count);
-    const remainder = totalCents - base * count;
-    return Array.from({ length: count }, (_, i) => ({
-      method: 'card' as const,
-      amount: (base + (i < remainder ? 1 : 0)) / 100,
-    }));
-  }
-
-  function handleSplitCountChange(count: number) {
+  function resizePayerList(count: number) {
     const clamped = Math.max(2, Math.min(10, count));
     setSplitCount(clamped);
-    setShares(buildEvenShares(total, clamped));
+    setShares(distributeEvenly(total, clamped).map((amount) => ({ method: 'card' as const, amount })));
+    setPercentages(distributeEvenly(100, clamped).map((v) => Math.round(v)));
+    setPercentMethods(Array.from({ length: clamped }, () => 'card' as const));
+    setItemMethods(Array.from({ length: clamped }, () => 'card' as const));
+    setItemAssignments({});
   }
 
   function updateShareAmount(index: number, amount: number) {
     setShares((prev) => prev.map((s, i) => (i === index ? { ...s, amount } : s)));
   }
-
   function updateShareMethod(index: number, shareMethod: 'cash' | 'card') {
     setShares((prev) => prev.map((s, i) => (i === index ? { ...s, method: shareMethod } : s)));
   }
 
   const splitSum = useMemo(() => shares.reduce((sum, s) => sum + (Number(s.amount) || 0), 0), [shares]);
   const splitDifference = Math.round((total - splitSum) * 100) / 100;
-  const splitValid = Math.abs(splitDifference) < 0.005;
+  const amountValid = Math.abs(splitDifference) < 0.005;
+
+  const percentSum = useMemo(() => percentages.reduce((sum, p) => sum + (Number(p) || 0), 0), [percentages]);
+  const percentValid = Math.abs(percentSum - 100) < 0.01;
+  const percentAmounts = useMemo(
+    () => (percentValid ? percentages.map((p) => Math.round((total * p) / 100 * 100) / 100) : []),
+    [percentages, total, percentValid]
+  );
+
+  const itemPayerTotals = useMemo(() => {
+    const totals = Array.from({ length: splitCount }, () => 0);
+    lines.forEach((line) => {
+      const key = line.lineKey ?? String(line.item.id);
+      const payer = itemAssignments[key];
+      if (payer !== undefined && payer < totals.length) totals[payer] += lineTotal(line);
+    });
+    return totals;
+  }, [lines, itemAssignments, splitCount]);
+  const allLinesAssigned = lines.length > 0 && lines.every((l) => itemAssignments[l.lineKey ?? String(l.item.id)] !== undefined);
+
+  const splitValid = splitBy === 'amount' ? amountValid : splitBy === 'percentage' ? percentValid : allLinesAssigned;
 
   function handleConfirm() {
-    if (splitMode) {
-      if (!splitValid) return;
-      onConfirm({ charges: shares.map((s) => ({ ...s, amount: Number(s.amount) })) });
-    } else {
+    if (!splitMode) {
       onConfirm({ method });
+      return;
+    }
+    if (splitBy === 'amount') {
+      if (!amountValid) return;
+      onConfirm({ charges: shares.map((s) => ({ ...s, amount: Number(s.amount) })) });
+    } else if (splitBy === 'percentage') {
+      if (!percentValid) return;
+      // Recompute with the same cent-safe distribution as the default even-split, using
+      // each payer's percentage as its relative weight rather than an equal share.
+      const cents = percentages.map((p) => Math.round((total * p * 100) / 100));
+      const totalCents = Math.round(total * 100);
+      const assignedCents = cents.reduce((s, c) => s + c, 0);
+      const diff = totalCents - assignedCents;
+      if (diff !== 0) cents[cents.length - 1] += diff; // fold any rounding remainder into the last payer
+      onConfirm({
+        charges: cents.map((c, i) => ({ method: percentMethods[i], amount: c / 100, note: `${percentages[i]}%` })),
+      });
+    } else {
+      if (!allLinesAssigned) return;
+      onConfirm({
+        charges: itemPayerTotals.map((amount, i) => ({
+          method: itemMethods[i],
+          amount: Math.round(amount * 100) / 100,
+          note: lines
+            .filter((l) => itemAssignments[l.lineKey ?? String(l.item.id)] === i)
+            .map((l) => lineLabel(l))
+            .join(', '),
+        })),
+      });
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-neutral-900">Take payment</h2>
           <button
@@ -108,6 +189,22 @@ export function PaymentModal({
 
         {splitMode && (
           <div className="mt-4 flex flex-col gap-3">
+            <div className="flex gap-1 rounded-lg bg-neutral-100 p-1 text-xs font-medium">
+              {(['amount', 'percentage', 'item'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={submitting || (mode === 'item' && lines.length === 0)}
+                  onClick={() => setSplitBy(mode)}
+                  className={`flex-1 rounded-md py-1.5 capitalize transition-colors disabled:opacity-40 ${
+                    splitBy === mode ? 'bg-white text-brand shadow-sm' : 'text-neutral-500'
+                  }`}
+                >
+                  {mode === 'item' ? 'By item' : mode}
+                </button>
+              ))}
+            </div>
+
             <div className="flex items-center gap-2 text-sm">
               <span className="text-neutral-600">Split into</span>
               <input
@@ -116,45 +213,142 @@ export function PaymentModal({
                 max={10}
                 value={splitCount}
                 disabled={submitting}
-                onChange={(e) => handleSplitCountChange(Number(e.target.value) || 2)}
+                onChange={(e) => resizePayerList(Number(e.target.value) || 2)}
                 className="w-16 rounded-lg border border-neutral-300 px-2 py-1 text-center text-sm"
               />
               <span className="text-neutral-600">ways</span>
             </div>
 
-            <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
-              {shares.map((share, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={share.amount}
-                    disabled={submitting}
-                    onChange={(e) => updateShareAmount(i, Number(e.target.value) || 0)}
-                    className="flex-1 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
-                  />
-                  <select
-                    value={share.method}
-                    disabled={submitting}
-                    onChange={(e) => updateShareMethod(i, e.target.value as 'cash' | 'card')}
-                    className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
-                  >
-                    <option value="card">Card</option>
-                    <option value="cash">Cash</option>
-                  </select>
+            {splitBy === 'amount' && (
+              <>
+                <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+                  {shares.map((share, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={share.amount}
+                        disabled={submitting}
+                        onChange={(e) => updateShareAmount(i, Number(e.target.value) || 0)}
+                        className="flex-1 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                      />
+                      <select
+                        value={share.method}
+                        disabled={submitting}
+                        onChange={(e) => updateShareMethod(i, e.target.value as 'cash' | 'card')}
+                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                      >
+                        <option value="card">Card</option>
+                        <option value="cash">Cash</option>
+                      </select>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+                <p className={`text-xs font-medium ${amountValid ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {amountValid
+                    ? 'Shares match the total.'
+                    : splitDifference > 0
+                    ? `€${splitDifference.toFixed(2)} still unassigned.`
+                    : `€${Math.abs(splitDifference).toFixed(2)} over the total.`}
+                </p>
+              </>
+            )}
 
-            <p className={`text-xs font-medium ${splitValid ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {splitValid
-                ? 'Shares match the total.'
-                : splitDifference > 0
-                ? `€${splitDifference.toFixed(2)} still unassigned.`
-                : `€${Math.abs(splitDifference).toFixed(2)} over the total.`}
-            </p>
+            {splitBy === 'percentage' && (
+              <>
+                <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+                  {percentages.map((pct, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={pct}
+                        disabled={submitting}
+                        onChange={(e) =>
+                          setPercentages((prev) => prev.map((p, idx) => (idx === i ? Number(e.target.value) || 0 : p)))
+                        }
+                        className="w-20 rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                      />
+                      <span className="text-xs text-neutral-500">%</span>
+                      <span className="flex-1 text-right text-sm text-neutral-600">
+                        €{percentValid && percentAmounts[i] !== undefined ? percentAmounts[i].toFixed(2) : '—'}
+                      </span>
+                      <select
+                        value={percentMethods[i]}
+                        disabled={submitting}
+                        onChange={(e) =>
+                          setPercentMethods((prev) => prev.map((m, idx) => (idx === i ? (e.target.value as 'cash' | 'card') : m)))
+                        }
+                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                      >
+                        <option value="card">Card</option>
+                        <option value="cash">Cash</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <p className={`text-xs font-medium ${percentValid ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {percentValid ? 'Percentages add up to 100%.' : `Percentages sum to ${percentSum}% (need 100%).`}
+                </p>
+              </>
+            )}
+
+            {splitBy === 'item' && (
+              <>
+                <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+                  {lines.map((line) => {
+                    const key = line.lineKey ?? String(line.item.id);
+                    return (
+                      <div key={key} className="flex items-center gap-2 text-sm">
+                        <span className="min-w-0 flex-1 truncate">{lineLabel(line)}</span>
+                        <span className="w-14 text-right text-neutral-500">€{lineTotal(line).toFixed(2)}</span>
+                        <select
+                          value={itemAssignments[key] ?? ''}
+                          disabled={submitting}
+                          onChange={(e) =>
+                            setItemAssignments((prev) => ({ ...prev, [key]: Number(e.target.value) }))
+                          }
+                          className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                        >
+                          <option value="" disabled>
+                            Assign…
+                          </option>
+                          {Array.from({ length: splitCount }, (_, i) => (
+                            <option key={i} value={i}>
+                              #{i + 1}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-col gap-1.5 border-t border-neutral-100 pt-2">
+                  {itemPayerTotals.map((amount, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm">
+                      <span className="w-14 text-xs text-neutral-500">#{i + 1}</span>
+                      <span className="flex-1 text-neutral-600">€{amount.toFixed(2)}</span>
+                      <select
+                        value={itemMethods[i]}
+                        disabled={submitting}
+                        onChange={(e) => setItemMethods((prev) => prev.map((m, idx) => (idx === i ? (e.target.value as 'cash' | 'card') : m)))}
+                        className="rounded-lg border border-neutral-300 px-2 py-1.5 text-sm"
+                      >
+                        <option value="card">Card</option>
+                        <option value="cash">Cash</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+                <p className={`text-xs font-medium ${allLinesAssigned ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {allLinesAssigned ? 'Every item is assigned to a payer.' : 'Assign every item to a payer before charging.'}
+                </p>
+              </>
+            )}
           </div>
         )}
 

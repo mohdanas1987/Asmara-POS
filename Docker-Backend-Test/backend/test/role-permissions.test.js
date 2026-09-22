@@ -35,18 +35,54 @@ test('with no overrides, the tenant-aware check matches the original hardcoded d
 });
 
 test('a waiter is refused payments.refund by default, matching the hardcoded map', async () => {
-    // NOTE: PERMISSIONS.ORDERS_VOID is declared in config/permissions.js but, discovered
-    // while writing this test, is not actually enforced by any route in this codebase
-    // (routes/orders.js's /cancel is fetchuser-only, no requirePermission call at all) --
-    // a pre-existing gap, out of scope for this feature, flagged rather than silently
-    // fixed. PAYMENTS_REFUND is a real, enforced permission a waiter genuinely lacks, so
-    // it's what this test actually exercises against a live route.
     const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-rp@test.local', role: 'waiter' });
     const res = await request(ctx.app)
         .post('/orders/seed_order_001/refund')
         .set('asmara-token', waiterToken)
         .send({ amount: 1 });
     assert.equal(res.status, 403);
+});
+
+// CTO forensic audit 2026-09-21 ("one especially important security issue remains"): this
+// used to be a documented-but-unfixed gap -- PERMISSIONS.ORDERS_VOID existed in the matrix
+// but /orders/cancel was fetchuser-only, so a waiter (who the hardcoded map deliberately
+// excludes from orders.void) could still cancel any order. Now actually enforced; this test
+// replaces the old NOTE that just flagged the gap.
+test('a waiter (no orders.void by default) is refused /orders/cancel', async () => {
+    const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-void@test.local', role: 'waiter' });
+    const res = await request(ctx.app)
+        .post('/orders/cancel/seed_order_001/1')
+        .set('asmara-token', waiterToken);
+    assert.equal(res.status, 403);
+});
+
+test('a manager (has orders.void by default) can reach /orders/cancel', async () => {
+    const managerToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'manager-void@test.local', role: 'manager' });
+    const res = await request(ctx.app)
+        .post('/orders/cancel/order-that-does-not-exist/1')
+        .set('asmara-token', managerToken);
+    // Authorization passes (not 403) -- the route then no-ops/errors harmlessly on a
+    // nonexistent order id, which is a separate concern from the permission check itself.
+    assert.notEqual(res.status, 403);
+});
+
+test('granting a waiter orders.void via the override table actually lets them cancel', async () => {
+    await request(ctx.app)
+        .patch('/roles/permissions')
+        .set('asmara-token', adminToken)
+        .send({ role: 'waiter', permission: PERMISSIONS.ORDERS_VOID, enabled: true });
+
+    const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-void-override@test.local', role: 'waiter' });
+    const res = await request(ctx.app)
+        .post('/orders/cancel/order-that-does-not-exist/1')
+        .set('asmara-token', waiterToken);
+    assert.notEqual(res.status, 403, 'the per-tenant override must actually change enforcement, not just the matrix display');
+
+    // Clean up the override so it doesn't leak into any test that runs after this one.
+    await request(ctx.app)
+        .delete('/roles/permissions')
+        .set('asmara-token', adminToken)
+        .send({ role: 'waiter', permission: PERMISSIONS.ORDERS_VOID });
 });
 
 test('GET /roles/permissions returns the full matrix with no overrides marked', async () => {
@@ -115,4 +151,84 @@ test('an override for one tenant never affects another tenant\'s effective permi
 
     const tenant2Effective = await roleHasPermissionForTenant(second.tenantId, 'cashier', PERMISSIONS.REPORTS_VIEW);
     assert.equal(tenant2Effective, roleHasPermission('cashier', PERMISSIONS.REPORTS_VIEW), "tenant 2 must still see the plain default, unaffected by tenant 1's override");
+});
+
+// Full RBAC enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// behavioral spot-checks for a representative sample of the routes newly gated by this
+// sprint's audit (test/rbac-audit.test.js proves ALL of them are gated by *something*
+// structurally; these confirm a handful actually enforce the right permission end-to-end).
+test('a waiter (no menu.manage) is refused POST /menu/create', async () => {
+    const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-menu@test.local', role: 'waiter' });
+    const res = await request(ctx.app)
+        .post('/menu/create')
+        .set('asmara-token', waiterToken)
+        .send({ name: 'Sneaky Category' });
+    assert.equal(res.status, 403);
+});
+
+test('a manager (has menu.manage) can reach POST /menu/create', async () => {
+    const managerToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'manager-menu@test.local', role: 'manager' });
+    const res = await request(ctx.app)
+        .post('/menu/create')
+        .set('asmara-token', managerToken)
+        .send({ name: 'Desserts' });
+    assert.notEqual(res.status, 403);
+});
+
+test('a cashier (no settings.manage) is refused POST /tax/create', async () => {
+    const cashierToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'cashier-tax@test.local', role: 'cashier' });
+    const res = await request(ctx.app)
+        .post('/tax/create')
+        .set('asmara-token', cashierToken)
+        .send({ name: 'VAT', percentage: 20 });
+    assert.equal(res.status, 403);
+});
+
+test('a kitchen role (no orders.create) is refused POST /orders/create', async () => {
+    const kitchenToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'kitchen-create@test.local', role: 'kitchen' });
+    const res = await request(ctx.app)
+        .post('/orders/create')
+        .set('asmara-token', kitchenToken)
+        .send({ order_id: 'seed_order_001', total: 10, payment_mode: 'cash', data: { cash: 10 } });
+    assert.equal(res.status, 403);
+});
+
+test('a waiter (has orders.create) can reach POST /orders/create', async () => {
+    const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-create@test.local', role: 'waiter' });
+    const res = await request(ctx.app)
+        .post('/orders/create')
+        .set('asmara-token', waiterToken)
+        .send({ order_id: 'order-that-does-not-exist', total: 10, payment_mode: 'cash', data: { cash: 10 } });
+    // Authorization passes (not 403); the route then fails harmlessly on a nonexistent
+    // order id, which is a separate concern from the permission check itself.
+    assert.notEqual(res.status, 403);
+});
+
+test('a cashier (no settings.manage) is refused POST /payments/connect', async () => {
+    const cashierToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'cashier-paymentsconnect@test.local', role: 'cashier' });
+    const res = await request(ctx.app)
+        .post('/payments/connect')
+        .set('asmara-token', cashierToken)
+        .send({ provider: 'stripe', api_key: 'sk_test_x' });
+    assert.equal(res.status, 403);
+});
+
+test('a waiter (has tables.transfer) can reach POST /tables/transfer', async () => {
+    const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-transfer@test.local', role: 'waiter' });
+    const res = await request(ctx.app)
+        .post('/tables/transfer')
+        .set('asmara-token', waiterToken)
+        .send({ from_table: '1', to_table: '2' });
+    // Authorization passes (not 403); the route then 404s on tables that don't exist in this
+    // test's seed data, which is a separate concern from the permission check itself.
+    assert.notEqual(res.status, 403);
+});
+
+test('a kitchen role (no tables.transfer) is refused POST /tables/transfer', async () => {
+    const kitchenToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'kitchen-transfer@test.local', role: 'kitchen' });
+    const res = await request(ctx.app)
+        .post('/tables/transfer')
+        .set('asmara-token', kitchenToken)
+        .send({ from_table: '1', to_table: '2' });
+    assert.equal(res.status, 403);
 });

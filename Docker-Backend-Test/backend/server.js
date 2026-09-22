@@ -62,6 +62,7 @@ app.use("/reports", require("./routes/reports"));
 app.use("/pos", require("./routes/pos"));
 app.use("/tax", require("./routes/tax"));
 app.use("/config", require("./routes/config"));
+app.use("/audit", require("./routes/audit"));
 
 
 app.get('/check-connection', async(req,res) => {

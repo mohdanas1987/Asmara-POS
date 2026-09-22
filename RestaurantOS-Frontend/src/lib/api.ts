@@ -158,7 +158,20 @@ export interface SplitCharge {
 // (routes/orders.js) rather than summing it with the merged-by-method `data` object also sent
 // alongside it (data is kept only for backward-compatible display). A call that omits
 // splitCharges is byte-for-byte the same request as before this task.
-export async function chargeOrder(orderId: number, total: number, method: 'cash' | 'card', splitCharges?: SplitCharge[]) {
+// Payment idempotency (CTO forensic audit 2026-09-21, P0 "Payment idempotency + recovery"):
+// `idempotencyKey`, when provided, lets a retried charge (a lost response after a slow/flaky
+// network, a cashier re-tapping "Charge" before seeing a confirmation) replay the ORIGINAL
+// result instead of the backend double-charging the customer -- see middlewares/idempotent.js.
+// Callers should generate ONE key per checkout attempt (e.g. when the payment screen opens)
+// and reuse it for every retry of that same attempt, generating a new one only for a
+// genuinely new, separate charge.
+export async function chargeOrder(
+  orderId: number,
+  total: number,
+  method: 'cash' | 'card',
+  splitCharges?: SplitCharge[],
+  idempotencyKey?: string
+) {
   const data =
     splitCharges && splitCharges.length > 0
       ? splitCharges.reduce<Record<string, number>>((acc, c) => {
@@ -177,6 +190,7 @@ export async function chargeOrder(orderId: number, total: number, method: 'cash'
         payment_mode: splitCharges && splitCharges.length > 0 ? 'split' : method,
         data,
         ...(splitCharges && splitCharges.length > 0 ? { charges: splitCharges } : {}),
+        ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
       }),
     }
   );
@@ -193,6 +207,13 @@ export async function updateTablePosition(tableNumber: string, x: number, y: num
   return apiFetch<{ status: boolean; message: string }>(
     `/tables/update-position/${encodeURIComponent(tableNumber)}`,
     { method: 'POST', body: JSON.stringify({ x, y }) }
+  );
+}
+
+export async function assignTableServer(tableNumber: string, serverId: number | null) {
+  return apiFetch<{ status: boolean; message: string }>(
+    `/tables/${encodeURIComponent(tableNumber)}/assign-server`,
+    { method: 'PATCH', body: JSON.stringify({ server_id: serverId }) }
   );
 }
 
@@ -750,12 +771,19 @@ export async function initTableOrder(tableNumber: string) {
   );
 }
 
+// Idempotency (CTO forensic audit 2026-09-21, P0 "Payment / order idempotency" + "Real
+// offline-first POS operation"): `idempotencyKey`, when provided, lets a retried send-to-
+// kitchen (a flaky connection, or a replay from the offline outbox -- see
+// lib/offline/outbox.ts) replay the ORIGINAL result instead of the backend creating a
+// second kitchen ticket for the same items. Optional and additive -- a caller that omits it
+// gets byte-for-byte the same request as before this task.
 export async function sendTableOrderToKitchen(
   tableNumber: string,
   orderId: number | string,
   quantities: Record<number, number>,
   total: number,
-  lines?: OrderLineDetail[]
+  lines?: OrderLineDetail[],
+  idempotencyKey?: string
 ) {
   const data: Record<string, unknown> = { quantity: quantities };
   if (lines && lines.length > 0) {
@@ -764,7 +792,15 @@ export async function sendTableOrderToKitchen(
   }
   return apiFetch<{ status: boolean; message: string; order: import('./types').Order }>(
     `/orders/to-kitchen/${encodeURIComponent(tableNumber)}`,
-    { method: 'POST', body: JSON.stringify({ order_id: orderId, data, total }) }
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        order_id: orderId,
+        data,
+        total,
+        ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+      }),
+    }
   );
 }
 
@@ -810,10 +846,20 @@ export async function getOrderPayments(orderId: string | number) {
   );
 }
 
-export async function refundOrder(orderId: string | number, amount: number, reason?: string) {
+// Cash-register accounting fix (CTO forensic audit 2026-09-21): `method` tells the backend
+// whether this refund should debit the physical cash drawer (only ever for 'cash') -- a card
+// refund is reversed by the payment provider, never by taking money out of the till.
+// `idempotencyKey` is the same retry-safety mechanism as chargeOrder's -- see its comment.
+export async function refundOrder(
+  orderId: string | number,
+  amount: number,
+  method: 'cash' | 'card',
+  reason?: string,
+  idempotencyKey?: string
+) {
   return apiFetch<{ status: boolean; message: string; transaction: PaymentTransaction; netPaid: number }>(
     `/orders/${orderId}/refund`,
-    { method: 'POST', body: JSON.stringify({ amount, reason }) }
+    { method: 'POST', body: JSON.stringify({ amount, method, reason, ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) }) }
   );
 }
 

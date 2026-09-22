@@ -7,6 +7,13 @@ const express = require('express');
 const router = express.Router();
 
 const fetchuser = require('../middlewares/loggedIn');
+// RBAC full-enforcement audit (CTO forensic audit 2026-09-21, "Full RBAC enforcement audit"):
+// connecting/disconnecting a payment terminal integration is sensitive tenant-wide config
+// (stores provider API secrets) -- gated behind SETTINGS_MANAGE, same as every other
+// integration-config route (routes/website.js, routes/sync.js). Firing an actual terminal
+// charge is a checkout action, gated behind ORDERS_CREATE like every other checkout route.
+const requirePermission = require('../middlewares/requirePermission');
+const { PERMISSIONS } = require('../config/permissions');
 const PaymentTerminalSettings = require('../models/PaymentTerminalSettings');
 
 const ADAPTERS = {
@@ -40,7 +47,7 @@ router.get('/status', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/connect', fetchuser, async (req, res) => {
+router.post('/connect', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async (req, res) => {
     try {
         const { provider, api_key, api_secret, terminal_id } = req.body;
         if (!ADAPTERS[provider]) {
@@ -65,7 +72,7 @@ router.post('/connect', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/disconnect', fetchuser, async (req, res) => {
+router.post('/disconnect', fetchuser, requirePermission(PERMISSIONS.SETTINGS_MANAGE), async (req, res) => {
     try {
         await PaymentTerminalSettings.query().where('tenant_id', req.body.tenant_id).patch({ connected: false });
         return res.json({ status: true, message: 'Payment terminal disconnected.' });
@@ -74,7 +81,7 @@ router.post('/disconnect', fetchuser, async (req, res) => {
     }
 });
 
-router.post('/charge', fetchuser, async (req, res) => {
+router.post('/charge', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), async (req, res) => {
     try {
         const settings = await getSettings(req.body.tenant_id);
         if (!settings?.connected) {
