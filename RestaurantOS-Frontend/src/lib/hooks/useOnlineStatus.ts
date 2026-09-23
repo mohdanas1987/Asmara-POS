@@ -100,7 +100,10 @@ async function replay(action: QueuedAction): Promise<unknown> {
       const b = action.body as unknown as CheckoutTableBody;
       const realOrderId = await resolveRealOrderId(b.orderId);
       await sendTableOrderToKitchen(b.tableNumber, realOrderId, b.quantities, b.total, b.lines, b.keys.toKitchen);
-      await chargeOrder(realOrderId, b.total, b.method ?? 'card', b.splitCharges, b.keys.charge);
+      // Offline payment recording (CTO remediation doc, Section 4): this charge is being
+      // sent from the offline queue right now -- tag it so, purely for traceability (see
+      // lib/api.ts's chargeOrder for what this does and doesn't affect).
+      await chargeOrder(realOrderId, b.total, b.method ?? 'card', b.splitCharges, b.keys.charge, true);
       // Only free the table once the kitchen send + charge have actually reached the server
       // -- freeing it earlier (e.g. optimistically, when the action was first queued) would
       // let another terminal seat a new party at a table whose bill hasn't really been paid

@@ -165,12 +165,19 @@ export interface SplitCharge {
 // Callers should generate ONE key per checkout attempt (e.g. when the payment screen opens)
 // and reuse it for every retry of that same attempt, generating a new one only for a
 // genuinely new, separate charge.
+// Offline payment recording (CTO remediation doc, Section 4): `recordedOffline`, when true,
+// tags this charge in the ledger as having been recorded via the offline outbox rather than a
+// live request (see migrations_local/0025 on the backend for why this is descriptive metadata
+// only, never a change to payment_status). Set by useOnlineStatus.ts's replay() when this call
+// is a queued 'orders.checkout-table' action actually being sent now; every other caller omits
+// it and is completely unaffected.
 export async function chargeOrder(
   orderId: number,
   total: number,
   method: 'cash' | 'card',
   splitCharges?: SplitCharge[],
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  recordedOffline?: boolean
 ) {
   const data =
     splitCharges && splitCharges.length > 0
@@ -191,6 +198,7 @@ export async function chargeOrder(
         data,
         ...(splitCharges && splitCharges.length > 0 ? { charges: splitCharges } : {}),
         ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        ...(recordedOffline ? { recorded_offline: true } : {}),
       }),
     }
   );
