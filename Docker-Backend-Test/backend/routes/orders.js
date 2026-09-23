@@ -491,6 +491,14 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
                 orderId: order.id,
                 payments: charges,
                 createdBy: req.body.myID,
+                // Offline payment recording (CTO remediation doc, Section 4): OPTIONAL, set
+                // by the frontend's offline outbox replay (useOnlineStatus.ts) when this
+                // charge is being sent from a queued 'orders.checkout-table' action, i.e. it
+                // was actually collected while this terminal had no network. A caller that
+                // never sends it (every existing online charge) is completely unaffected --
+                // same additive, backward-compatible shape as every other optional field in
+                // this route (expected_version, extra, etc.).
+                recordedOffline: !!req.body.recorded_offline,
             });
 
             // Order line normalization, phase 1: snapshot the order's lines into

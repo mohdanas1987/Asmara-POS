@@ -14,8 +14,12 @@ function toCents(amount) {
   return Math.round(Number(amount) * 100);
 }
 
-/** Records one or more charges against an order. `payments` is [{ method, amount }, ...]. */
-async function recordCharges({ tenantId, orderId, payments, createdBy }) {
+/** Records one or more charges against an order. `payments` is [{ method, amount }, ...].
+ * `recordedOffline`, when true (CTO remediation doc, Section 4), tags every row from this
+ * call as having been recorded via the offline outbox rather than a live request -- purely
+ * descriptive metadata (see migrations_local/0025's own comment for why this is NOT a new
+ * payment status), never read by getNetPaid/deriveStatus below. */
+async function recordCharges({ tenantId, orderId, payments, createdBy, recordedOffline }) {
   const rows = payments
     .filter((p) => p && Number(p.amount) > 0)
     .map((p) => ({
@@ -32,6 +36,7 @@ async function recordCharges({ tenantId, orderId, payments, createdBy }) {
       // this table was created.
       note: p.note ?? null,
       created_by: createdBy ?? null,
+      recorded_offline: !!recordedOffline,
     }));
   if (rows.length === 0) return [];
   // Bill splitting (task #49) is the first caller to ever pass more than one row here at
