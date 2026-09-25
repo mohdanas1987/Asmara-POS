@@ -78,6 +78,7 @@ const idempotent = require('../middlewares/idempotent');
 const { PERMISSIONS } = require('../config/permissions');
 const { snapshotOrderLines } = require('../services/orderLineSnapshot');
 const { validateAndPriceLines, ModifierValidationError } = require('../services/modifierValidation');
+const { computeAuthoritativeTotal, ROUNDING_TOLERANCE_CENTS, toCents } = require('../services/orderTotals');
 const auditLog = require('../services/auditLog');
 const { recordStatusChangeSafe, recordTableEventSafe } = require('../services/orderHistory');
 
@@ -445,6 +446,41 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
             modes = { ...req.body.data, modes };
         } else {
             modes = req.body.data;
+        }
+
+        // Server-authoritative financial totals (CTO doc "Asmara POS -- Remaining Work Only",
+        // Phase 24: "the backend currently trusts client-provided totals too much... SERVER
+        // CALCULATES TOTAL, client total only used for comparison"). Runs BEFORE any write to
+        // this order -- a rejected charge must never bump `version`, flip `payment_status`, or
+        // touch the cash drawer. Only meaningful when this call is actually charging something
+        // (an existing table/quantity-only /create call, or one with no line detail at all yet,
+        // is untouched -- see services/orderTotals.js's own header comment for the weight-item
+        // and no-discount-mechanism scoping this relies on).
+        const chargeAttempt = chargesFromArray(req.body.charges).length > 0 || chargesFromModes(modes).length > 0;
+        if (chargeAttempt && req.body.total !== undefined && req.body.total !== null && (preChargeLines || preChargeQuantity)) {
+            const verification = await computeAuthoritativeTotal({
+                tenantId: req.body.tenant_id,
+                lines: preChargeLines,
+                quantity: preChargeQuantity,
+            });
+            if (verification.verifiable) {
+                const submittedCents = toCents(req.body.total);
+                const computedCents = toCents(verification.total);
+                if (Math.abs(submittedCents - computedCents) > ROUNDING_TOLERANCE_CENTS) {
+                    return res.status(409).json({
+                        status: false,
+                        totalMismatch: true,
+                        message: 'The submitted total does not match the order\'s items at current prices. Refresh the order and try again.',
+                        submitted_total: req.body.total,
+                        computed_total: verification.total,
+                    });
+                }
+            } else {
+                // Not verifiable (weight-sold item, deleted product, etc.) -- log for visibility
+                // and proceed exactly as before this feature existed, never guess-reject a
+                // legitimate sale this module cannot yet price with confidence.
+                console.log('[order-totals] non-fatal: could not verify order total for order', req.body.order_id, '-', verification.reason);
+            }
         }
 
         let payload = {
