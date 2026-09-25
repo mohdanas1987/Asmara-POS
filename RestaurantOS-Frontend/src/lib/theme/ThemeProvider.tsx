@@ -8,6 +8,16 @@
  * screen having one at all). Persisted to localStorage so a terminal remembers its chosen
  * theme across restarts -- most restaurants will pick one and leave it, since the POS runs
  * on a fixed terminal, not a personal device with its own OS-level preference that changes.
+ *
+ * "Aura Glass" re-theme (this pass): dark is now the app's DEFAULT and primary designed
+ * identity (OLED canvas, flame-amber accent -- see globals.css's .dark block), not a
+ * secondary opt-in mode a user had to go find a toggle for. A terminal that has never
+ * chosen a theme now boots straight into it. This intentionally no longer follows the OS
+ * `prefers-color-scheme` on first run either -- the previous fallback made a fresh
+ * terminal's first-ever look depend on whatever the underlying OS/browser happened to be
+ * set to, which is the opposite of a deliberate, consistent brand default. Light mode is
+ * unchanged and one tap away (TopBar's theme toggle) for anyone who prefers it; once a
+ * terminal has explicitly chosen either theme, that choice is remembered exactly as before.
  */
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 
@@ -24,22 +34,20 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function getInitialTheme(): Theme {
-  if (typeof window === 'undefined') return 'light';
+  if (typeof window === 'undefined') return 'dark';
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     if (stored === 'light' || stored === 'dark') return stored;
   } catch {
     // localStorage can throw in some embedded/kiosk browser contexts -- fall through to the
-    // system preference rather than crashing the whole app over a theme preference.
+    // deliberate default below rather than crashing the whole app over a theme preference.
   }
-  if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    return 'dark';
-  }
-  return 'light';
+  // No saved preference yet -- Aura Glass dark is the app's designed default.
+  return 'dark';
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('light');
+  const [theme, setThemeState] = useState<Theme>('dark');
 
   // Read the real initial theme only after mount, so server-rendered HTML and the first
   // client render match (avoids a hydration mismatch warning from guessing at render time).

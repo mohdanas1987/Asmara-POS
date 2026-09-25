@@ -32,7 +32,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0F766E',
+  // Matches the Aura Glass dark theme's flame-amber accent, since dark is now the app's
+  // default -- this is the color a browser/OS chrome (PWA title bar, Android task switcher)
+  // paints around the app, so it should match what the user actually sees on first launch.
+  themeColor: '#ff6b00',
   width: 'device-width',
   initialScale: 1,
 };
@@ -45,6 +48,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rendered markup by design -- this is the documented, correct way to avoid a
           false-positive hydration warning for exactly this pattern. */}
       <body>
+        {/* Blocking theme-init script (runs before paint, before React hydrates): without
+            this, the page would render server-side with no `.dark` class -- a real,
+            visible flash of the OLD light theme before ThemeProvider's own effect adds the
+            class a moment later. Reads the exact same localStorage key ThemeProvider uses,
+            so they can never disagree; falls back to 'dark' (this app's default) on any
+            error, matching ThemeProvider's own fallback exactly. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function () {
+                try {
+                  var stored = localStorage.getItem('restaurantos-theme');
+                  if (stored === 'light') return;
+                } catch (e) {}
+                document.documentElement.classList.add('dark');
+              })();
+            `,
+          }}
+        />
         <ThemeProvider>
           <ToastProvider>{children}</ToastProvider>
         </ThemeProvider>
