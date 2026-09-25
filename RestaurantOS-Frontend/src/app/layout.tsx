@@ -1,7 +1,20 @@
 import type { Metadata, Viewport } from 'next';
+import '@fontsource-variable/plus-jakarta-sans';
 import '../styles/globals.css';
 import { ThemeProvider } from '@/lib/theme/ThemeProvider';
 import { ToastProvider } from '@/components/ui/Toast';
+
+// "Aura Glass" re-theme (this pass): the font ships as a real npm dependency
+// (@fontsource-variable/plus-jakarta-sans) rather than a next/font/google live fetch from
+// Google's CDN -- next/font/google still needs ONE successful network call at build time to
+// resolve, and a build server with restricted/no egress (a real, not hypothetical,
+// deployment shape for this kind of on-prem POS) would fail the whole production build over
+// a font. Fontsource bundles the actual .woff2 files into node_modules and npm install is
+// already how every other dependency here is fetched, so this has the exact same network
+// requirement as `npm install` and nothing more -- consistent with this app's offline-first
+// design (see src/lib/offline/), which already treats "no live network at runtime" as a
+// normal operating condition, not an edge case. tailwind.config.ts's fontFamily.sans points
+// at the family name this package declares ('Plus Jakarta Sans Variable').
 
 export const metadata: Metadata = {
   title: 'RestaurantOS',

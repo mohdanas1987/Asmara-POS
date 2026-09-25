@@ -10,31 +10,54 @@
  * screens that would each look different once dark mode or a brand re-theme was needed.
  * RGB triples (not hex) because Tailwind's `rgb(var(--x) / <alpha-value>)` pattern needs
  * space-separated channel values to support opacity modifiers like `bg-surface/50`.
+ *
+ * "Aura Glass" re-theme (this pass, ChatGPT-CTO-adjacent design request: wire the AuraPOS
+ * prototype's visual language into the real app): light mode's values below are UNCHANGED
+ * from before this pass -- `--canvas` is defined equal to `--surface` in light mode, so a
+ * daytime venue running light mode sees pixel-for-pixel the same screens as before. Only
+ * `.dark` changes, becoming the actual Aura Glass palette (OLED deep-charcoal canvas, glass
+ * surfaces, flame-amber brand) -- reached through the SAME theme toggle every screen already
+ * wires through (see ThemeProvider.tsx), so this took two files, not a rewrite of every
+ * component.
  */
 :root {
   color-scheme: light;
+  --canvas: 255 255 255; /* page background -- identical to --surface in light mode, on purpose */
   --surface: 255 255 255; /* white */
   --surface-raised: 249 250 251; /* neutral-50, e.g. hover rows */
   --surface-sunken: 243 244 246; /* neutral-100, e.g. input backgrounds */
   --border: 229 231 235; /* neutral-200 */
   --ink: 17 24 39; /* neutral-900 */
   --ink-muted: 107 114 128; /* neutral-500 */
-  --brand-rgb: 15 118 110; /* #0F766E, matches tailwind.config.ts's brand.DEFAULT -- used by the glow shadow/gradient utilities */
+  --brand-rgb: 15 118 110; /* #0F766E */
+  --brand-dark-rgb: 11 90 84; /* #0B5A54 */
+  --brand-light-rgb: 20 184 166; /* #14B8A6 */
+  --brand-deep-rgb: 11 75 70; /* #0B4B46 -- brand-gradient's third stop */
 }
 
 .dark {
   color-scheme: dark;
-  --surface: 24 24 27; /* zinc-900 */
-  --surface-raised: 39 39 42; /* zinc-800 */
-  --surface-sunken: 9 9 11; /* zinc-950, recessed inputs read as "deeper" than the page */
-  --border: 63 63 70; /* zinc-700 */
-  --ink: 244 244 245; /* zinc-100 */
-  --ink-muted: 161 161 170; /* zinc-400 */
-  --brand-rgb: 20 184 166; /* brand.light -- glows read better with the lighter teal in dark mode */
+  /* OLED-friendly deep charcoal canvas the AuraPOS prototype was built around -- true near-
+     black (not a lightened "dark gray") holds contrast and battery draw better on the
+     OLED/kiosk displays this is aimed at, and reads calmer in a low-lit dining room than the
+     previous zinc-900 page background. */
+  --canvas: 11 11 14; /* #0b0b0e */
+  --surface: 20 20 24; /* #141418 -- glass card/panel level, one step up from canvas */
+  --surface-raised: 30 30 36; /* #1e1e24 -- hover/elevated rows, lighter than surface */
+  --surface-sunken: 9 9 11; /* recessed inputs read "deeper" than the canvas itself */
+  --border: 48 48 56; /* soft, low-contrast hairline -- glass edges, not hard lines */
+  --ink: 255 255 255;
+  --ink-muted: 158 158 160;
+  /* Flame-amber accent -- optimized for fast recognition on a busy, low-lit floor. Replaces
+     the lighter teal this pass's dark mode used before. */
+  --brand-rgb: 255 107 0; /* #ff6b00 */
+  --brand-dark-rgb: 204 86 0; /* hover/pressed state */
+  --brand-light-rgb: 255 159 10; /* #ff9f0a -- lighter amber, e.g. badges/secondary highlights */
+  --brand-deep-rgb: 138 43 0; /* brand-gradient's third stop -- a deep ember, not muddy brown */
 }
 
 body {
-  @apply bg-surface text-ink antialiased;
+  @apply bg-canvas text-ink antialiased;
 }
 
 /* A touch target smaller than 44x44px is the single most common reason a POS "feels
@@ -44,6 +67,17 @@ body {
  * the same min-h-11 min-w-11 pair. */
 .touch-target {
   @apply min-h-touch min-w-touch;
+}
+
+/* "Aura Glass" utility (this pass): a translucent, blurred surface for chrome that floats
+ * over page content -- the top bar, modals, floating panels. Built entirely from the
+ * existing `surface`/`border` tokens (not new hardcoded colors), so it already looks right
+ * in both themes: a soft frosted-white bar in light mode, a true OLED glass panel in dark
+ * mode. Opt-in via className, not applied globally -- most cards (Cart, ProductGrid,
+ * TableBox) stay fully opaque, since translucency on every surface would fight legibility
+ * rather than help it. */
+.glass-panel {
+  @apply bg-surface/75 backdrop-blur-xl border border-border;
 }
 
 /* Table/Floor management redesign (project audit 2026-09-15): scope window.print() (used by
@@ -88,7 +122,8 @@ body {
 /* Touch-flash feedback (beautification pass): every touch-target briefly flashes a bold
    brand-colored ring/glow when tapped, so a busy floor staff member gets an unmistakable
    "yes, that registered" cue on a touchscreen -- not just the browser's default tap
-   highlight (which most POS kiosks disable anyway). */
+   highlight (which most POS kiosks disable anyway). Brand-colored means teal in light mode,
+   flame-amber in dark mode, automatically, via --brand-rgb. */
 @keyframes touchFlash {
   0% { box-shadow: 0 0 0 0 rgb(var(--brand-rgb) / 0.55); }
   70% { box-shadow: 0 0 0 10px rgb(var(--brand-rgb) / 0); }

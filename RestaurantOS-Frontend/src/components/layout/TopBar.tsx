@@ -34,7 +34,7 @@ export function TopBar({ title }: { title: string }) {
   return (
     <>
     {switchingUser && <SwitchUserModal onClose={() => setSwitchingUser(false)} />}
-    <header className="relative flex items-center justify-between overflow-hidden border-b border-border bg-surface px-4 py-3 shadow-card">
+    <header className="relative flex items-center justify-between overflow-hidden border-b border-border bg-surface/75 backdrop-blur-xl px-4 py-3 shadow-card">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-brand-gradient" />
       <div className="flex items-baseline gap-3">
         <h1 className="text-lg font-semibold text-ink">{title}</h1>
