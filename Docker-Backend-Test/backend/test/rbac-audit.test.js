@@ -83,6 +83,7 @@ const ALLOWLIST = {
     },
     'sync.js': {
         'POST /terminals/register': "an automated terminal heartbeat/self-registration fired on boot by the terminal app itself, not a user-initiated action.",
+        'POST /push': "handles its own finer-grained check in-handler: a single push batch can carry mutations for different entity types (table_layout vs. menu_item) that require DIFFERENT permissions (SETTINGS_MANAGE vs. MENU_MANAGE respectively) -- a static per-route middleware tag can't express a per-mutation-in-a-batch distinction, so this route is intentionally exempted from the blanket check and instead covered by its own behavioral tests in test/sync-mutations.test.js (see ENTITY_PERMISSION in routes/sync.js).",
     },
     'users.js': {
         'POST /:id/pin': "handles its own finer-grained check in-handler: setting one's OWN pin needs no extra permission, setting someone ELSE's pin requires STAFF_MANAGE (see the comment above this route) -- a static middleware tag can't express that self-vs-other distinction, so this route is intentionally exempted from the blanket check and instead covered by its own behavioral test.",

@@ -106,13 +106,15 @@ test('a genuinely concurrent double-tap of "open table" (same idempotency_key) o
     assert.equal(finalOrders.length, 1, 'the retried loser must be handed the same cached order, never create a second one');
 });
 
-test('two DIFFERENT idempotency keys for the same free table still correctly create only one order -- the loser sees the pre-existing table-status conflict check', async () => {
-    // This is the still-open gap (item 4, multi-terminal conflict resolution): idempotency
-    // only protects against the SAME queued action replaying. Two different terminals each
-    // queuing their OWN "open table 22" action offline (different keys, because they never
-    // saw each other) still race on the underlying `table.status !== 'free'` check exactly
-    // like they did before this change -- this test documents that honestly rather than
-    // implying idempotency alone solved multi-terminal conflicts.
+test('two DIFFERENT idempotency keys for the same free table still correctly create only one order -- the loser sees the real 409 table-claim conflict', async () => {
+    // This used to document a still-open gap (item 4, multi-terminal conflict resolution):
+    // idempotency only protects against the SAME queued action replaying, and two different
+    // terminals each queuing their OWN "open table 22" action offline (different keys, because
+    // they never saw each other) used to race on a plain read-then-write `table.status` check.
+    // That race is now CLOSED: GET /orders/init/:table claims the table with an atomic
+    // compare-and-set inside a transaction (see routes/orders.js), so the loser gets a real,
+    // durable 409 conflict instead of a bare 403. See test/table-claim-race.test.js for the
+    // dedicated genuinely-concurrent (Promise.all) proof of this fix.
     const keyA = 'offline-init-table-22-terminal-a';
     const keyB = 'offline-init-table-22-terminal-b';
 
@@ -120,8 +122,9 @@ test('two DIFFERENT idempotency keys for the same free table still correctly cre
     assert.equal(first.status, 200, JSON.stringify(first.body));
 
     const second = await request(ctx.app).get('/orders/init/22').set('asmara-token', token).send({ idempotency_key: keyB });
-    assert.equal(second.status, 403, JSON.stringify(second.body));
+    assert.equal(second.status, 409, JSON.stringify(second.body));
     assert.equal(second.body.status, false);
+    assert.equal(second.body.conflict, true);
     assert.match(second.body.message, /not available/i);
 
     const orders = await ctx.knex('orders').where({ tenant_id: 1, tables: '22' });
