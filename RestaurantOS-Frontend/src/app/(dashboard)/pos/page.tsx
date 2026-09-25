@@ -212,13 +212,15 @@ function PosPage() {
     return { quantities, weights };
   }
 
-  // Same shape as buildQuantities' `weights` map, but for modifier detail -- only cart lines
-  // that actually have a modifier selection are included (a plain item is already fully
-  // represented by the flat `quantities` map, exactly as before this feature).
+  // Same shape as buildQuantities' `weights` map, but for modifier/seat detail -- only cart
+  // lines that actually carry EXTRA detail beyond a plain quantity are included (a plain item
+  // with no modifiers and no seat assignment is already fully represented by the flat
+  // `quantities` map, exactly as before either feature existed). Seat & guest architecture
+  // (CTO doc "Asmara POS -- Remaining Work Only", Phase 22) added the `seat` half of this.
   function buildLineDetail(): OrderLineDetail[] {
     return cart.lines
-      .filter((l) => l.modifiers && l.modifiers.length > 0)
-      .map((l) => ({ itemId: l.item.id, qty: l.qty, modifiers: l.modifiers }));
+      .filter((l) => (l.modifiers && l.modifiers.length > 0) || l.seat !== undefined)
+      .map((l) => ({ itemId: l.item.id, qty: l.qty, modifiers: l.modifiers, seat: l.seat }));
   }
 
   async function handleAddItem(item: MenuItem) {

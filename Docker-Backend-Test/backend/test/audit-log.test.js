@@ -126,6 +126,56 @@ test('changing a staff member\'s role writes a staff.update audit event', async 
     assert.equal(event.payload.previous_role, 'waiter');
 });
 
+test('merging tables writes a table.merge audit event (CTO doc "Remaining Work Only", item 6)', async () => {
+    await ctx.knex('tables').insert([
+        { table_number: '70', status: 'free', x: 0, y: 0, length: 80, width: 80 },
+        { table_number: '71', status: 'free', x: 100, y: 0, length: 80, width: 80 },
+    ]);
+
+    const res = await request(ctx.app).post('/orders/link/70+71').set('asmara-token', token);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+
+    const event = await latestEvent('table.merge');
+    assert.ok(event, 'expected a table.merge event to exist');
+    assert.equal(event.entity_id, '70+71');
+    assert.deepEqual(event.payload.tables, ['70', '71']);
+});
+
+test('splitting a merged group writes a table.split audit event (CTO doc "Remaining Work Only", item 6)', async () => {
+    await ctx.knex('tables').insert([
+        { table_number: '72', status: 'free', linked_to: '72+73', x: 0, y: 0, length: 80, width: 80 },
+        { table_number: '73', status: 'free', linked_to: '72+73', x: 100, y: 0, length: 80, width: 80 },
+    ]);
+
+    const res = await request(ctx.app).post('/tables/split-table/72+73').set('asmara-token', token).send({ keep_on: '72' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+
+    const event = await latestEvent('table.split');
+    assert.ok(event, 'expected a table.split event to exist');
+    assert.equal(event.entity_id, '72+73');
+    assert.equal(event.payload.keep_on, '72');
+    assert.deepEqual(event.payload.freed, ['73']);
+});
+
+test('editing an already-in-kitchen order\'s line quantities writes an order.line_edit audit event (CTO doc "Remaining Work Only", item 6)', async () => {
+    const order = await ctx.knex('orders').insert({
+        id: 'audit-line-edit-1', tenant_id: 1, tables: '74', status: 'in-kitchen', payment_status: 'pending',
+        total: 10, data: JSON.stringify({ quantity: { 5: 1 } }), version: 1,
+    });
+    void order;
+
+    const res = await request(ctx.app)
+        .post('/orders/to-kitchen/74')
+        .set('asmara-token', token)
+        .send({ order_id: 'audit-line-edit-1', data: { quantity: { 5: 3 } }, total: 30 });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+
+    const event = await latestEvent('order.line_edit');
+    assert.ok(event, 'expected an order.line_edit event to exist');
+    assert.equal(String(event.entity_id), 'audit-line-edit-1');
+    assert.equal(event.payload.quantity_delta['5'], 2, 'the recorded delta must be the CHANGE (3 - 1), not the new absolute quantity');
+});
+
 test('a waiter (no reports.view by default) is refused GET /audit', async () => {
     const waiterToken = await seedStaffUser(request, ctx.app, ctx.knex, { email: 'waiter-audit@test.local', role: 'waiter' });
     const res = await request(ctx.app).get('/audit').set('asmara-token', waiterToken);

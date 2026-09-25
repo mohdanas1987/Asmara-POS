@@ -92,6 +92,17 @@ export function useCart() {
 
   const clear = useCallback(() => setLines([]), []);
 
+  // Seat & guest architecture (CTO doc "Asmara POS -- Remaining Work Only", Phase 22): assigns
+  // (or clears, when `seat` is undefined) which seat a cart line belongs to. Purely a cart-side
+  // label until the order is charged -- see pos/page.tsx's buildLineDetail(), which is what
+  // actually carries `seat` through to the backend (services/orderLineSnapshot.js persists it
+  // onto order_items, and services/payments/billSplit.js's computeSeatSplit reads it back).
+  const assignSeat = useCallback((lineKey: string, seat: number | undefined) => {
+    setLines((prev) =>
+      prev.map((l) => (lineKeyFor(l) === lineKey ? { ...l, seat } : l))
+    );
+  }, []);
+
   // Preloads the cart from an existing order's stored {productId: qty} map -- used when
   // resuming a table that already has items sent to kitchen (see /pos?table=&order=).
   // Weight-based and modifier-selected lines can't be reconstructed from a plain qty map
@@ -121,7 +132,7 @@ export function useCart() {
   // since callers pass both and this is only used when the richer detail actually exists.
   const loadFromLines = useCallback(
     (
-      savedLines: Array<{ itemId: number; qty: number; modifiers?: SelectedModifier[] }>,
+      savedLines: Array<{ itemId: number; qty: number; modifiers?: SelectedModifier[]; seat?: number }>,
       items: MenuItem[]
     ) => {
       const byId = new Map(items.map((it) => [it.id, it]));
@@ -131,7 +142,7 @@ export function useCart() {
         if (!item || sl.qty <= 0) return;
         const sig = modifiersSignature(sl.modifiers);
         const lineKey = sig ? nextModifierLineKey(item.id) : String(item.id);
-        restored.push({ item, qty: sl.qty, modifiers: sl.modifiers, lineKey });
+        restored.push({ item, qty: sl.qty, modifiers: sl.modifiers, seat: sl.seat, lineKey });
       });
       setLines(restored);
     },
@@ -190,6 +201,7 @@ export function useCart() {
     loadFromQuantities,
     loadFromLines,
     loadFromPersistedLines,
+    assignSeat,
     subtotal,
     tax,
     total,

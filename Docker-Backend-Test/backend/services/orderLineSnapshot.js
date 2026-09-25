@@ -54,11 +54,16 @@ async function snapshotOrderLines({ tenantId, orderId, lines, fallbackQuantities
         modifiers: Array.isArray(l.modifiers) ? l.modifiers : [],
         course: l.course || null,
         note: l.note || null,
+        // Seat & guest architecture (Phase 22): which seat this line belongs to, when the
+        // cart assigned one -- see migrations_local/0026's header comment. Absent on every
+        // pre-existing line shape, so an order with no seat assignment snapshots identically
+        // to before this field existed.
+        seatNumber: Number.isInteger(l.seat) ? l.seat : null,
       }));
   } else if (fallbackQuantities && typeof fallbackQuantities === 'object') {
     normalizedLines = Object.entries(fallbackQuantities)
       .filter(([, qty]) => Number(qty) > 0)
-      .map(([productId, qty]) => ({ productId, quantity: Number(qty), modifiers: [], course: null, note: null }));
+      .map(([productId, qty]) => ({ productId, quantity: Number(qty), modifiers: [], course: null, note: null, seatNumber: null }));
   }
 
   if (normalizedLines.length === 0) return { skipped: true, reason: 'no line detail to snapshot' };
@@ -99,6 +104,7 @@ async function snapshotOrderLines({ tenantId, orderId, lines, fallbackQuantities
       gross_amount: grossAmount,
       course: line.course,
       note: line.note,
+      seat_number: line.seatNumber,
       created_at: now,
     });
     modifierRowsByLineIndex.push(line.modifiers || []);

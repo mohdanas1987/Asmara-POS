@@ -79,6 +79,8 @@ const { PERMISSIONS } = require('../config/permissions');
 const { snapshotOrderLines } = require('../services/orderLineSnapshot');
 const { validateAndPriceLines, ModifierValidationError } = require('../services/modifierValidation');
 const { computeAuthoritativeTotal, ROUNDING_TOLERANCE_CENTS, toCents } = require('../services/orderTotals');
+const seatService = require('../services/seatService');
+const { recordConflict } = require('../services/conflictLog');
 const auditLog = require('../services/auditLog');
 const { recordStatusChangeSafe, recordTableEventSafe } = require('../services/orderHistory');
 
@@ -414,6 +416,15 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
                 orderVersionForPatch = Number(orderBeforeCharge.version ?? 1);
                 if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
                     if (Number(req.body.expected_version) !== orderVersionForPatch) {
+                        recordConflict({
+                            tenantId: req.body.tenant_id,
+                            entityType: 'order',
+                            entityId: req.body.order_id,
+                            terminalId: req.body.terminal_id,
+                            route: 'orders.create',
+                            localVersion: Number(req.body.expected_version),
+                            serverVersion: orderVersionForPatch,
+                        });
                         return res.status(409).json({
                             status: false,
                             conflict: true,
@@ -467,6 +478,19 @@ router.post('/create', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), 
                 const submittedCents = toCents(req.body.total);
                 const computedCents = toCents(verification.total);
                 if (Math.abs(submittedCents - computedCents) > ROUNDING_TOLERANCE_CENTS) {
+                    // Recorded in the same durable conflict registry as a version conflict
+                    // (migrations_local/0027) -- a mismatched total is a different KIND of
+                    // conflict (the client's view of the order's price disagreed with the
+                    // server's, not a stale write), but deserves the same "this happened, an
+                    // operator can review it" durability rather than just a transient 409.
+                    recordConflict({
+                        tenantId: req.body.tenant_id,
+                        entityType: 'order_total',
+                        entityId: req.body.order_id,
+                        terminalId: req.body.terminal_id,
+                        route: 'orders.create',
+                        detail: { submitted_total: req.body.total, computed_total: verification.total },
+                    });
                     return res.status(409).json({
                         status: false,
                         totalMismatch: true,
@@ -673,6 +697,21 @@ async function linkTablesHandler(req, res) {
             console.log('[offline-sync] non-fatal: could not record table merge change:', syncError.message);
         }
 
+        // Complete audit coverage (CTO doc "Asmara POS -- Remaining Work Only", item 6:
+        // "table merge/split" explicitly named as a remaining audit gap). This route already
+        // recorded the change for OFFLINE SYNC purposes (recordChange above), but that log is
+        // for propagating state between terminals, not for a manager reviewing what happened
+        // and who did it -- this is the actual audit trail entry.
+        auditLog.record({
+            tenantId: req.body.tenant_id,
+            actorUserId: req.body.myID,
+            actorRole: req.authRole,
+            eventType: 'table.merge',
+            entityType: 'table',
+            entityId: link,
+            payload: { tables: tableNumbers, linked_to: link },
+        });
+
         return res.json({
             status: true,
             message: "Tables merged!",
@@ -821,6 +860,15 @@ router.post('/to-kitchen/:table?', fetchuser, requirePermission(PERMISSIONS.ORDE
             // does send it gets a real conflict check instead of a silent overwrite.
             if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
                 if (Number(req.body.expected_version) !== Number(previousOrder.version ?? 1)) {
+                    recordConflict({
+                        tenantId: req.body.tenant_id,
+                        entityType: 'order',
+                        entityId: req.body.order_id,
+                        terminalId: req.body.terminal_id,
+                        route: 'orders.to-kitchen',
+                        localVersion: Number(req.body.expected_version),
+                        serverVersion: Number(previousOrder.version ?? 1),
+                    });
                     return res.status(409).json({
                         status: false,
                         conflict: true,
@@ -868,6 +916,24 @@ router.post('/to-kitchen/:table?', fetchuser, requirePermission(PERMISSIONS.ORDE
                     toStatus: order.status,
                     reason: 'to-kitchen',
                     userId: req.body.myID,
+                });
+            }
+
+            // Complete audit coverage (CTO doc "Asmara POS -- Remaining Work Only", item 6:
+            // "order-line edits" named as a remaining gap): an already-in-kitchen order's
+            // quantities being changed (adding/removing/adjusting items on a live order) is a
+            // real edit to what's being charged, distinct from the initial send-to-kitchen --
+            // only logged when something in `updatedQt` actually changed, so a no-op resend of
+            // the same quantities doesn't spam the audit log.
+            if (previousOrder.status === 'in-kitchen' && Object.keys(updatedQt).length > 0) {
+                auditLog.record({
+                    tenantId: req.body.tenant_id,
+                    actorUserId: req.body.myID,
+                    actorRole: req.authRole,
+                    eventType: 'order.line_edit',
+                    entityType: 'order',
+                    entityId: order.id,
+                    payload: { quantity_delta: updatedQt },
                 });
             }
         } else {
@@ -964,6 +1030,15 @@ router.post('/payment-update', fetchuser, requirePermission(PERMISSIONS.ORDERS_C
         // `expected_version` is completely unaffected.
         if (req.body.expected_version !== undefined && req.body.expected_version !== null) {
             if (Number(req.body.expected_version) !== Number(existingOrder.version ?? 1)) {
+                recordConflict({
+                    tenantId: req.body.tenant_id,
+                    entityType: 'order',
+                    entityId: req.body.order_id,
+                    terminalId: req.body.terminal_id,
+                    route: 'orders.payment-update',
+                    localVersion: Number(req.body.expected_version),
+                    serverVersion: Number(existingOrder.version ?? 1),
+                });
                 return res.status(409).json({
                     status: false,
                     conflict: true,
@@ -1103,14 +1178,94 @@ router.post('/:order/bill-split/preview', fetchuser, requirePermission(PERMISSIO
             if (Math.abs(linesTotal - billSplit.toCents(order.total)) > 1) {
                 linesTotalMismatch = { linesTotal: billSplit.fromCents(linesTotal), orderTotal: order.total };
             }
+        } else if (mode === 'seat') {
+            // Seat-based bill splitting (CTO doc "Asmara POS -- Remaining Work Only", Phase
+            // 22/item 4) -- see billSplit.js's computeSeatSplit for why this needs no manual
+            // per-payer assignment, unlike 'items' above: it reads each line's PERSISTED
+            // `seat` field (set when the item was added to the cart).
+            let lines = [];
+            try {
+                const data = JSON.parse(order.data || '{}');
+                lines = Array.isArray(data.lines) ? data.lines : [];
+            } catch (_parseErr) {
+                lines = [];
+            }
+            if (lines.length === 0) {
+                return res.status(400).json({ status: false, message: 'This order has no per-line detail to split by seat -- use "even" or "percentage" instead.' });
+            }
+            const productIds = [...new Set(lines.map((l) => l.itemId).filter((id) => id !== undefined && id !== null))];
+            const products = productIds.length > 0
+                ? await Product.query().where('tenant_id', req.body.tenant_id).whereIn('id', productIds)
+                : [];
+            const productsById = new Map(products.map((p) => [String(p.id), p]));
+
+            const guestRows = await seatService.listGuests({ tenantId: req.body.tenant_id, orderId: req.params.order });
+            const guestsBySeat = new Map(guestRows.filter((g) => g.guest_name).map((g) => [g.seat_number, g.guest_name]));
+
+            shares = billSplit.computeSeatSplit({ lines, products: productsById, guestsBySeat });
+
+            // Every line is always accounted for by computeSeatSplit (an unassigned line goes
+            // into the "Unassigned" bucket rather than being dropped), so the only legitimate
+            // mismatch source here is the same one 'items' mode already documents: a service
+            // charge, tip, or manual adjustment not reflected in any line.
+            const linesTotal = shares.reduce((sum, s) => sum + billSplit.toCents(s.amount), 0);
+            if (Math.abs(linesTotal - billSplit.toCents(order.total)) > 1) {
+                linesTotalMismatch = { linesTotal: billSplit.fromCents(linesTotal), orderTotal: order.total };
+            }
         } else {
-            return res.status(400).json({ status: false, message: 'mode must be "even", "percentage", or "items".' });
+            return res.status(400).json({ status: false, message: 'mode must be "even", "percentage", "items", or "seat".' });
         }
 
-        if (mode !== 'items') {
+        if (mode !== 'items' && mode !== 'seat') {
             billSplit.assertSharesSumToTotal(shares, order.total);
         }
-        return res.json({ status: true, order_total: order.total, shares, warning: linesTotalMismatch ? 'Computed item shares do not match the order total -- this order likely has a service charge, tip, or manual adjustment not reflected in its line items.' : null, lines_total_mismatch: linesTotalMismatch });
+        return res.json({ status: true, order_total: order.total, shares, warning: linesTotalMismatch ? 'Computed shares do not match the order total -- this order likely has a service charge, tip, or manual adjustment not reflected in its line items.' : null, lines_total_mismatch: linesTotalMismatch });
+    } catch (error) {
+        return res.status(400).json({ status: false, message: error.message });
+    }
+});
+
+// Seat & guest architecture (CTO doc "Asmara POS -- Remaining Work Only", Phase 22/item 3):
+// lets staff name/rename a guest at a seat on an order, list an order's seated guests, and
+// clear a seat's name. Naming a seat is entirely optional -- items can be assigned to a seat
+// number (via cart-line `seat`, see migrations_local/0026) whether or not a guest has ever
+// been named for it; these routes only manage the human-readable label.
+router.post('/:order/guests', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), async (req, res) => {
+    try {
+        const order = await Order.query().where('tenant_id', req.body.tenant_id).findById(req.params.order);
+        if (!order) {
+            return res.status(404).json({ status: false, message: 'Order not found.' });
+        }
+        const guest = await seatService.upsertGuest({
+            tenantId: req.body.tenant_id,
+            orderId: req.params.order,
+            seatNumber: Number(req.body.seat_number),
+            guestName: req.body.guest_name,
+        });
+        return res.json({ status: true, guest });
+    } catch (error) {
+        const statusCode = error.statusCode || 400;
+        return res.status(statusCode).json({ status: false, message: error.message });
+    }
+});
+
+router.get('/:order/guests', fetchuser, async (req, res) => {
+    try {
+        const guests = await seatService.listGuests({ tenantId: req.body.tenant_id, orderId: req.params.order });
+        return res.json({ status: true, guests });
+    } catch (error) {
+        return res.status(400).json({ status: false, message: error.message });
+    }
+});
+
+router.delete('/:order/guests/:seatNumber', fetchuser, requirePermission(PERMISSIONS.ORDERS_CREATE), async (req, res) => {
+    try {
+        const result = await seatService.removeGuest({
+            tenantId: req.body.tenant_id,
+            orderId: req.params.order,
+            seatNumber: Number(req.params.seatNumber),
+        });
+        return res.json({ status: true, ...result });
     } catch (error) {
         return res.status(400).json({ status: false, message: error.message });
     }

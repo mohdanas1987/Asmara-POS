@@ -72,6 +72,19 @@ export interface CartLine {
   weight?: number; // present only for sold_by_weight items -- the reading (in item.weight_unit) this line was priced at
   lineKey?: string; // stable identity for setQty/removeItem -- multiple weighings of the same item are separate lines
   modifiers?: SelectedModifier[]; // e.g. [{name: 'Extra cheese', price_delta: 1.50}, {name: 'No onion', price_delta: 0}]
+  // Seat & guest architecture (CTO doc "Asmara POS -- Remaining Work Only", Phase 22): which
+  // seat (1-based, scoped to this order -- see backend migrations_local/0026's header
+  // comment) this line is for. Undefined/absent means "not assigned to a seat" -- a shared
+  // starter, or an order nobody has bothered to seat-split -- and is always valid; nothing
+  // requires a seat to be set.
+  seat?: number;
+}
+
+// Seat & guest architecture: an order's named seats (backend's order_guests table), as
+// returned by GET /orders/:order/guests.
+export interface OrderGuest {
+  seat_number: number;
+  guest_name: string | null;
 }
 
 // Course firing (CTO forensic audit 2026-09-20): what's currently held back from the

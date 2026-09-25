@@ -157,6 +157,60 @@ function computeItemSplit({ lines, products, assignments }) {
   return results;
 }
 
+/**
+ * Splits an order's lines by their PERSISTED seat assignment (CTO doc "Asmara POS -- Remaining
+ * Work Only", Phase 22/item 4: "seat-based bill splitting"). Unlike computeItemSplit above
+ * (which needs the cashier to manually assign each item to a payer at split time),
+ * computeSeatSplit needs no manual assignment at all -- it reads `line.seat`, set when the
+ * item was ADDED to the cart (see migrations_local/0026's header comment for the seat domain
+ * design), and simply totals each seat's own lines.
+ *
+ * Every line is accounted for, including lines with no seat assigned at all -- grouped under
+ * seat_number: null / label "Unassigned" rather than silently dropped, so switching a table
+ * from item-split (which deliberately throws on any gap) to seat-split can never make money
+ * quietly disappear just because not every line has been assigned a seat yet. `guestsBySeat`
+ * is an optional Map<number, string> (seat_number -> guest_name, from seatService.listGuests)
+ * used only to make the label friendlier -- a seat with no named guest still gets a real,
+ * correct total under "Seat N".
+ */
+function computeSeatSplit({ lines, products, guestsBySeat }) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error('No line items to split by seat.');
+  }
+
+  const bySeat = new Map(); // seat_number (or null) -> { cents, itemCount }
+  for (const line of lines) {
+    const seatNumber = Number.isInteger(line.seat) ? line.seat : null;
+    const product = products.get(String(line.itemId));
+    const unitPriceGross = product ? parsePrice(product.price) : 0;
+    const modifierDelta = (line.modifiers || []).reduce((sum, m) => sum + (Number(m && m.price_delta) || 0), 0);
+    const qty = Number(line.qty ?? line.quantity ?? 1);
+    const cents = toCents((unitPriceGross + modifierDelta) * qty);
+
+    const bucket = bySeat.get(seatNumber) || { cents: 0, itemCount: 0 };
+    bucket.cents += cents;
+    bucket.itemCount += qty;
+    bySeat.set(seatNumber, bucket);
+  }
+
+  const guests = guestsBySeat instanceof Map ? guestsBySeat : new Map();
+  // Unassigned bucket sorted last, seats sorted numerically -- a stable, predictable order for
+  // any UI/receipt that renders this directly.
+  const seatNumbers = [...bySeat.keys()].sort((a, b) => {
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return a - b;
+  });
+
+  return seatNumbers.map((seatNumber) => {
+    const bucket = bySeat.get(seatNumber);
+    const label = seatNumber === null
+      ? 'Unassigned'
+      : (guests.get(seatNumber) || `Seat ${seatNumber}`);
+    return { seat_number: seatNumber, label, amount: fromCents(bucket.cents), item_count: bucket.itemCount };
+  });
+}
+
 function assertSharesSumToTotal(shares, totalEuros, toleranceCents = 1) {
   const sumCents = shares.reduce((sum, s) => sum + toCents(s.amount), 0);
   if (Math.abs(sumCents - toCents(totalEuros)) > toleranceCents) {
@@ -164,4 +218,4 @@ function assertSharesSumToTotal(shares, totalEuros, toleranceCents = 1) {
   }
 }
 
-module.exports = { computeEvenSplit, computePercentageSplit, computeItemSplit, assertSharesSumToTotal, toCents, fromCents };
+module.exports = { computeEvenSplit, computePercentageSplit, computeItemSplit, computeSeatSplit, assertSharesSumToTotal, toCents, fromCents };

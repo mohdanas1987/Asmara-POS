@@ -9,6 +9,7 @@ const { body, validationResult } = require('express-validator');
 const fetchuser = require('../middlewares/loggedIn');
 const { getChangesSince } = require('../services/offline/syncLog');
 const { getStatus } = require('../services/offline/outbox');
+const { listConflicts } = require('../services/conflictLog');
 const Model = require('objection').Model;
 
 function knex() {
@@ -66,6 +67,19 @@ router.get('/changes', fetchuser, async (req, res) => {
             changes: changes.map((c) => ({ ...c, payload: JSON.parse(c.payload) })),
             cursor: changes.length > 0 ? changes[changes.length - 1].id : sinceId,
         });
+    } catch (e) {
+        return res.status(500).json({ status: false, message: e.message });
+    }
+});
+
+// Conflict records (CTO doc "Asmara POS -- Remaining Work Only", Phase 21/item 2): a durable,
+// queryable list of every rejected stale write / mismatched total this tenant has hit -- see
+// migrations_local/0027 and services/conflictLog.js. Powers a future reconciliation screen;
+// until that UI exists, this is still real, usable data an admin can pull directly.
+router.get('/conflicts', fetchuser, async (req, res) => {
+    try {
+        const conflicts = await listConflicts({ tenantId: req.body.tenant_id, entityType: req.query.entity_type });
+        return res.json({ status: true, conflicts });
     } catch (e) {
         return res.status(500).json({ status: false, message: e.message });
     }

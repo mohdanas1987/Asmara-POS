@@ -122,6 +122,48 @@ export interface OrderLineDetail {
   itemId: number;
   qty: number;
   modifiers?: import('./types').SelectedModifier[];
+  // Seat & guest architecture (CTO doc "Asmara POS -- Remaining Work Only", Phase 22): which
+  // seat (1-based, per-order) this line belongs to -- see useCart.ts's assignSeat(). Optional,
+  // same as `modifiers` -- an order with no seat assignment at all sends byte-for-byte the
+  // same shape as before this field existed.
+  seat?: number;
+}
+
+// Seat & guest architecture: names (or renames) a guest at a seat on an order. Calling this
+// again for the same seat updates the name in place. `guestName: null` clears the name back
+// to an unnamed seat without removing the seat's own item assignments.
+export async function setOrderGuest(orderId: number | string, seatNumber: number, guestName: string | null) {
+  return apiFetch<{ status: boolean; guest: { seat_number: number; guest_name: string | null } }>(
+    `/orders/${encodeURIComponent(String(orderId))}/guests`,
+    { method: 'POST', body: JSON.stringify({ seat_number: seatNumber, guest_name: guestName }) }
+  );
+}
+
+export async function getOrderGuests(orderId: number | string) {
+  return apiFetch<{ status: boolean; guests: import('./types').OrderGuest[] }>(
+    `/orders/${encodeURIComponent(String(orderId))}/guests`
+  );
+}
+
+export async function removeOrderGuest(orderId: number | string, seatNumber: number) {
+  return apiFetch<{ status: boolean; deleted: number }>(
+    `/orders/${encodeURIComponent(String(orderId))}/guests/${seatNumber}`,
+    { method: 'DELETE' }
+  );
+}
+
+// Seat-based bill split preview (mode: 'seat') -- reuses the existing bill-split/preview
+// route's response shape; seat_number is null for the "Unassigned" bucket.
+export async function previewSeatSplit(orderId: number | string) {
+  return apiFetch<{
+    status: boolean;
+    order_total: number;
+    shares: Array<{ seat_number: number | null; label: string; amount: number; item_count: number }>;
+    warning: string | null;
+  }>(`/orders/${encodeURIComponent(String(orderId))}/bill-split/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ mode: 'seat' }),
+  });
 }
 
 export async function sendDirectSaleToKitchen(

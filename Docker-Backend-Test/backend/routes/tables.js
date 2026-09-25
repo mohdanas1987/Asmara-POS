@@ -155,6 +155,19 @@ async function splitTableHandler(req, res) {
                 console.log('[offline-sync] non-fatal: could not record table split change:', syncError.message);
             }
 
+            // Complete audit coverage (CTO doc "Asmara POS -- Remaining Work Only", item 6:
+            // "table merge/split" named as a remaining gap). recordChange above is for offline
+            // sync propagation between terminals; this is the actual reviewable audit trail.
+            auditLog.record({
+                tenantId: req.body.tenant_id,
+                actorUserId: req.body.myID,
+                actorRole: req.authRole,
+                eventType: 'table.split',
+                entityType: 'table',
+                entityId: tableNumber,
+                payload: { tables, keep_on: keepOn, freed: freedTables, order_id: order ? order.id : null },
+            });
+
             return res.json({
                 status: true,
                 message: order
