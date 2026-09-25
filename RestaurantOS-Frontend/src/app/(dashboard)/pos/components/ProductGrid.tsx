@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MenuCategory, MenuItem } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
 import clsx from 'clsx';
@@ -75,6 +75,21 @@ function ItemThumb({ item }: { item: MenuItem }) {
           ⚖ / {item.weight_unit || 'kg'}
         </span>
       )}
+
+      {/* Stock indicator (SaaS design pass, 2026-09-25) -- driven by the REAL `quantity`
+          field already on MenuItem (no fabricated "chef's choice"-style flag this data model
+          doesn't have). 0 = "86'd" (industry term for out of stock -- see the 86/Stock Out
+          toggle below), a low positive count is a heads-up before it runs out mid-service. */}
+      {typeof item.quantity === 'number' && item.quantity <= 0 && (
+        <span className="absolute bottom-2 right-2 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+          86'd
+        </span>
+      )}
+      {typeof item.quantity === 'number' && item.quantity > 0 && item.quantity <= 5 && (
+        <span className="absolute bottom-2 right-2 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
+          {item.quantity} left
+        </span>
+      )}
     </div>
   );
 }
@@ -92,25 +107,73 @@ export function ProductGrid({
 }) {
   const [activeCategory, setActiveCategory] = useState<number | 'all'>('all');
   const [query, setQuery] = useState('');
+  // 86/Stock Out filter (SaaS design pass, 2026-09-25): hides items whose REAL `quantity`
+  // field is <= 0, so a busy cashier doesn't keep tapping something the kitchen already ran
+  // out of. Off by default -- 86'd items still show (with the badge above) unless toggled.
+  const [hideOutOfStock, setHideOutOfStock] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Instant search "/" shortcut (spec): focuses the search box from anywhere on the screen,
+  // the same convention Slack/Linear/Gmail use -- ignored while already typing in a text
+  // field so it doesn't hijack a search query that itself contains "/".
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== '/') return;
+      const target = e.target as HTMLElement | null;
+      const isTyping = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (isTyping) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const stockFiltered = useMemo(
+    () => (hideOutOfStock ? items.filter((it) => !(typeof it.quantity === 'number' && it.quantity <= 0)) : items),
+    [items, hideOutOfStock]
+  );
+
+  // Per-category item counts (spec: "Category Bar ... with item counters") -- computed off
+  // the stock-filtered set so the count next to a category tab matches what tapping it will
+  // actually show, including while 86'd items are hidden.
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    stockFiltered.forEach((it) => counts.set(it.category_id, (counts.get(it.category_id) ?? 0) + 1));
+    return counts;
+  }, [stockFiltered]);
 
   const filtered = useMemo(() => {
-    return items.filter((it) => {
+    return stockFiltered.filter((it) => {
       const matchesCategory = activeCategory === 'all' || it.category_id === activeCategory;
       const matchesQuery = it.name.toLowerCase().includes(query.toLowerCase());
       return matchesCategory && matchesQuery;
     });
-  }, [items, activeCategory, query]);
+  }, [stockFiltered, activeCategory, query]);
 
   return (
     <div className="flex h-full flex-col">
       <div className="mb-3 flex items-center gap-2">
         <input
+          ref={searchInputRef}
           autoFocus
-          placeholder="Search items… (or scan a barcode)"
+          placeholder="Search items… (or scan a barcode) — press / to focus"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="flex-1 rounded-lg border border-border bg-surface px-3 py-2.5 text-[15px] text-ink shadow-card transition-shadow focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
         />
+        <button
+          type="button"
+          onClick={() => setHideOutOfStock((v) => !v)}
+          aria-pressed={hideOutOfStock}
+          title="Hide items that are out of stock"
+          className={clsx(
+            'touch-target flex-shrink-0 rounded-lg border px-3 text-xs font-semibold uppercase tracking-wide transition-colors',
+            hideOutOfStock ? 'border-rose-500 bg-rose-500/10 text-rose-500' : 'border-border text-ink-muted hover:border-brand/60 hover:text-brand'
+          )}
+        >
+          86 / Stock out
+        </button>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2">
@@ -122,6 +185,7 @@ export function ProductGrid({
           )}
         >
           All
+          <span className="ml-1.5 tabular-nums opacity-70">{stockFiltered.length}</span>
         </button>
         {categories.map((c) => (
           <button
@@ -133,6 +197,7 @@ export function ProductGrid({
             )}
           >
             {c.name}
+            <span className="ml-1.5 tabular-nums opacity-70">{categoryCounts.get(c.id) ?? 0}</span>
           </button>
         ))}
       </div>
@@ -156,7 +221,7 @@ export function ProductGrid({
               <ItemThumb item={item} />
               <div className="flex flex-1 flex-col p-3">
                 <span className="line-clamp-2 text-[15px] font-semibold leading-snug text-ink">{item.name}</span>
-                <span className="mt-auto flex items-baseline gap-1 pt-2 text-lg font-bold text-brand">
+                <span className="mt-auto flex items-baseline gap-1 pt-2 text-lg font-bold tabular-nums text-brand">
                   €{parsePrice(item.price).toFixed(2)}
                   {Boolean(item.sold_by_weight) && (
                     <span className="text-xs font-normal text-ink-muted">/ {item.weight_unit || 'kg'}</span>

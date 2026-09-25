@@ -103,6 +103,15 @@ export function useCart() {
     );
   }, []);
 
+  // OrderSidebar "custom line-item note drawer" (SaaS design pass, 2026-09-25) -- a
+  // free-text note per cart line (e.g. "no onions", "extra crispy"). CartLine already had an
+  // (unused) optional `note` field reserved for exactly this; nothing set it until now.
+  const setNote = useCallback((lineKey: string, note: string) => {
+    setLines((prev) =>
+      prev.map((l) => (lineKeyFor(l) === lineKey ? { ...l, note: note || undefined } : l))
+    );
+  }, []);
+
   // Preloads the cart from an existing order's stored {productId: qty} map -- used when
   // resuming a table that already has items sent to kitchen (see /pos?table=&order=).
   // Weight-based and modifier-selected lines can't be reconstructed from a plain qty map
@@ -202,6 +211,7 @@ export function useCart() {
     loadFromLines,
     loadFromPersistedLines,
     assignSeat,
+    setNote,
     subtotal,
     tax,
     total,

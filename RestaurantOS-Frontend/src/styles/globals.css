@@ -25,6 +25,7 @@
   --canvas: 255 255 255; /* page background -- identical to --surface in light mode, on purpose */
   --surface: 255 255 255; /* white */
   --surface-raised: 249 250 251; /* neutral-50, e.g. hover rows */
+  --surface-active: 243 244 246; /* Level 3 (SaaS design pass): light mode reuses neutral-100, unchanged look */
   --surface-sunken: 243 244 246; /* neutral-100, e.g. input backgrounds */
   --border: 229 231 235; /* neutral-200 */
   --ink: 17 24 39; /* neutral-900 */
@@ -37,14 +38,17 @@
 
 .dark {
   color-scheme: dark;
-  /* OLED-friendly deep charcoal canvas the AuraPOS prototype was built around -- true near-
-     black (not a lightened "dark gray") holds contrast and battery draw better on the
-     OLED/kiosk displays this is aimed at, and reads calmer in a low-lit dining room than the
-     previous zinc-900 page background. */
-  --canvas: 11 11 14; /* #0b0b0e */
-  --surface: 20 20 24; /* #141418 -- glass card/panel level, one step up from canvas */
-  --surface-raised: 30 30 36; /* #1e1e24 -- hover/elevated rows, lighter than surface */
-  --surface-sunken: 9 9 11; /* recessed inputs read "deeper" than the canvas itself */
+  /* SaaS design pass (2026-09-25, "Principal Frontend Architect" spec): a proper 3-level
+     elevation system on top of an OLED-ultra-deep canvas, replacing the previous 2-level
+     surface/surface-raised pair with canvas -> surface (Level 1: panels) -> surface-raised
+     (Level 2: cards/items) -> surface-active (Level 3: active/selected, new below). Exact
+     hex values from spec, converted to the r g b triplets these CSS vars have always used
+     (see tailwind.config.ts's rgb(var(--x) / <alpha-value>) pattern). */
+  --canvas: 9 9 12; /* #09090C -- OLED ultra-deep charcoal */
+  --surface: 18 18 23; /* #121217 -- Level 1: panels (sidebar, header, dialogs) */
+  --surface-raised: 26 26 34; /* #1A1A22 -- Level 2: cards / menu items / cart lines */
+  --surface-active: 37 37 48; /* #252530 -- Level 3: active/selected (paired with a brand/amber ring, not a border alone) */
+  --surface-sunken: 6 6 8; /* recessed inputs read "deeper" than the canvas itself */
   --border: 48 48 56; /* soft, low-contrast hairline -- glass edges, not hard lines */
   --ink: 255 255 255;
   --ink-muted: 158 158 160;

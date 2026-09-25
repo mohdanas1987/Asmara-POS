@@ -27,6 +27,7 @@ import { parsePrice } from '@/lib/tax';
 import { publishCustomerDisplay } from '@/lib/customerDisplay';
 import { printReceipt, printKitchenTicket, cartLinesToTicketLines } from '@/lib/printing';
 import { HeldCoursesBar } from './components/HeldCoursesBar';
+import { PosHeader } from '@/components/layout/PosHeader';
 import { CartBillDialog } from './components/CartBillDialog';
 import { enqueueAction } from '@/lib/offline/outbox';
 import { isNetworkError } from '@/lib/offline/network';
@@ -455,43 +456,35 @@ function PosPage() {
         <OpenRegisterModal onOpen={async (cash) => { await register.open(cash); }} />
       )}
 
-      <section className="flex min-h-0 flex-col">
+      <section className="flex min-h-0 flex-col gap-3">
+        <PosHeader />
         {isTableOrder && orderId && <HeldCoursesBar orderId={orderId} refreshKey={heldCoursesRefresh} />}
         {isTableOrder && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2">
+          // SaaS design pass (2026-09-25): now uses design-system tokens (was hardcoded
+          // amber-*/neutral-* light-mode colors that never adapted to dark mode, unlike
+          // every other screen since the Aura Glass pass). "Send to kitchen" and
+          // "View/print bill" moved into the OrderSidebar (Cart component) itself, next to
+          // the ticket they act on -- see its "Course firing controls" section.
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/[0.03] bg-surface px-4 py-2">
             <div>
-              <span className="font-semibold text-amber-900">Table #{table}</span>
-              <span className="ml-2 text-xs text-amber-700">Order #{orderId}</span>
+              <span className="font-semibold text-ink">Table #{table}</span>
+              <span className="ml-2 text-xs text-ink-muted">Order #{orderId}</span>
               {!isOnline && (
-                <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                <span className="ml-2 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-500">
                   Offline -- actions will queue and sync automatically
                 </span>
               )}
             </div>
             <div className="flex gap-2">
               <button
-                onClick={handleSendToKitchen}
-                disabled={sendingToKitchen || cart.lines.length === 0}
-                className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-              >
-                {sendingToKitchen ? 'Sending…' : 'Send to kitchen 🖨️'}
-              </button>
-              <button
-                onClick={() => setShowBill(true)}
-                disabled={cart.lines.length === 0}
-                className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-              >
-                View / print bill 🧾
-              </button>
-              <button
                 onClick={handleCancelTableOrder}
-                className="rounded-lg border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                className="touch-target rounded-lg border border-rose-500/40 px-3 text-sm font-medium text-rose-500 hover:bg-rose-500/10"
               >
                 Cancel order
               </button>
               <button
                 onClick={() => router.push('/tables')}
-                className="rounded-lg border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-100"
+                className="touch-target rounded-lg border border-white/[0.07] px-3 text-sm font-medium text-ink-muted hover:bg-surface-raised"
               >
                 ← Tables
               </button>
@@ -516,6 +509,12 @@ function PosPage() {
           onSetQty={cart.setQty}
           onRemove={cart.removeItem}
           onClear={cart.clear}
+          isTableOrder={isTableOrder}
+          onAssignSeat={cart.assignSeat}
+          onSetNote={cart.setNote}
+          onSendToKitchen={isTableOrder ? handleSendToKitchen : undefined}
+          sendingToKitchen={sendingToKitchen}
+          onPrintBill={isTableOrder ? () => setShowBill(true) : undefined}
           onCharge={() => {
             // A freshly-opened payment screen is a NEW checkout attempt -- clear any
             // leftover key from a previous attempt so this one gets its own.

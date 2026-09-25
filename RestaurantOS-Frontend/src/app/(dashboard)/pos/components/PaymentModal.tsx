@@ -23,12 +23,25 @@
  */
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
+import { NumericKeypad } from '@/components/ui/NumericKeypad';
 import { SplitCharge } from '@/lib/api';
 import { CartLine } from '@/lib/types';
 import { parsePrice } from '@/lib/tax';
 
 type ConfirmPayload = { method: 'cash' | 'card' } | { charges: SplitCharge[] };
-type SplitBy = 'amount' | 'percentage' | 'item';
+// SaaS design pass (2026-09-25): 'amount' IS "split equally" -- resizePayerList already
+// seeds it via distributeEvenly(total, count) below, and stayed manually editable per payer
+// (renaming it wouldn't change behavior). 'seat' is new: it groups cart lines by the REAL
+// `CartLine.seat` field (now assignable from the OrderSidebar's seat tabs -- see Cart.tsx)
+// instead of requiring a manual per-line payer assignment like 'item' does.
+type SplitBy = 'amount' | 'percentage' | 'item' | 'seat';
+
+// Quick cash tender (spec: "$20, $50, $100, Exact Change" buttons + keypad) -- purely a
+// client-side change calculator. The backend has no concept of "amount tendered" for a cash
+// sale, only the total actually owed (chargeOrder always charges the full order total) --
+// this never changes what gets charged, it just helps the cashier work out change to hand
+// back, the same way a physical cash drawer's till roll would.
+const QUICK_CASH_STEPS = [20, 50, 100];
 
 function lineTotal(line: CartLine): number {
   const modifiersTotal = (line.modifiers ?? []).reduce((sum, m) => sum + (Number(m.price_delta) || 0), 0);
@@ -66,9 +79,14 @@ export function PaymentModal({
   error?: string | null;
 }) {
   const [method, setMethod] = useState<'cash' | 'card'>('card');
+  // Quick cash tender (spec) -- amount tendered, for the change calculator below. Only
+  // relevant when method === 'cash' and not in split mode.
+  const [tendered, setTendered] = useState('');
   const [splitMode, setSplitMode] = useState(false);
   const [splitBy, setSplitBy] = useState<SplitBy>('amount');
   const [splitCount, setSplitCount] = useState(2);
+  // "By seat" methods, keyed by seat number (0 = "Shared" / unassigned lines).
+  const [seatMethods, setSeatMethods] = useState<Record<number, 'cash' | 'card'>>({});
   const [shares, setShares] = useState<SplitCharge[]>(() =>
     distributeEvenly(total, 2).map((amount) => ({ method: 'card' as const, amount }))
   );
@@ -117,7 +135,33 @@ export function PaymentModal({
   }, [lines, itemAssignments, splitCount]);
   const allLinesAssigned = lines.length > 0 && lines.every((l) => itemAssignments[l.lineKey ?? String(l.item.id)] !== undefined);
 
-  const splitValid = splitBy === 'amount' ? amountValid : splitBy === 'percentage' ? percentValid : allLinesAssigned;
+  // "By seat" (SaaS design pass, 2026-09-25): groups lines by the REAL CartLine.seat field
+  // (see Cart.tsx's new SeatTag) instead of a manual per-line payer assignment -- seat 0
+  // stands in for "Shared" (no seat assigned), so a starter everyone split still gets billed
+  // to someone rather than silently dropped from the split.
+  const seatGroups = useMemo(() => {
+    const totals = new Map<number, number>();
+    lines.forEach((line) => {
+      const seat = line.seat ?? 0;
+      totals.set(seat, (totals.get(seat) ?? 0) + lineTotal(line));
+    });
+    return Array.from(totals.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([seat, amount]) => ({ seat, amount }));
+  }, [lines]);
+  const seatSplitPossible = seatGroups.length > 1 || (seatGroups.length === 1 && seatGroups[0].seat !== 0);
+
+  const tenderedAmount = Number(tendered) || 0;
+  const changeDue = tenderedAmount - total;
+
+  const splitValid =
+    splitBy === 'amount'
+      ? amountValid
+      : splitBy === 'percentage'
+      ? percentValid
+      : splitBy === 'item'
+      ? allLinesAssigned
+      : seatSplitPossible;
 
   function handleConfirm() {
     if (!splitMode) {
@@ -127,6 +171,15 @@ export function PaymentModal({
     if (splitBy === 'amount') {
       if (!amountValid) return;
       onConfirm({ charges: shares.map((s) => ({ ...s, amount: Number(s.amount) })) });
+    } else if (splitBy === 'seat') {
+      if (!seatSplitPossible) return;
+      onConfirm({
+        charges: seatGroups.map(({ seat, amount }) => ({
+          method: seatMethods[seat] ?? 'card',
+          amount: Math.round(amount * 100) / 100,
+          note: seat === 0 ? 'Shared' : `Seat ${seat}`,
+        })),
+      });
     } else if (splitBy === 'percentage') {
       if (!percentValid) return;
       // Recompute with the same cent-safe distribution as the default even-split, using
@@ -171,40 +224,89 @@ export function PaymentModal({
         <p className="mt-1 text-3xl font-bold text-brand">€{total.toFixed(2)}</p>
 
         {!splitMode && (
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            {(['card', 'cash'] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMethod(m)}
-                disabled={submitting}
-                className={`rounded-xl border-2 py-4 text-sm font-medium capitalize transition-colors ${
-                  method === m ? 'border-brand bg-brand/5 text-brand' : 'border-border text-ink-muted'
-                }`}
-              >
-                {m}
-              </button>
-            ))}
+          <div className="mt-5 flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              {(['card', 'cash'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMethod(m)}
+                  disabled={submitting}
+                  className={`rounded-xl border-2 py-4 text-sm font-medium capitalize transition-colors ${
+                    method === m ? 'border-brand bg-brand/5 text-brand' : 'border-border text-ink-muted'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+
+            {/* Quick cash tender + change calculator (spec) -- see QUICK_CASH_STEPS' comment
+                above for why this never changes what's actually charged. */}
+            {method === 'cash' && (
+              <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface-sunken/60 p-3">
+                <div className="flex flex-wrap gap-2">
+                  {QUICK_CASH_STEPS.map((amount) => (
+                    <button
+                      key={amount}
+                      type="button"
+                      disabled={submitting}
+                      onClick={() => setTendered(String(amount))}
+                      className="touch-target flex-1 rounded-lg border border-border bg-surface text-sm font-semibold text-ink hover:border-brand hover:text-brand"
+                    >
+                      €{amount}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => setTendered(total.toFixed(2))}
+                    className="touch-target flex-1 rounded-lg border border-border bg-surface text-sm font-semibold text-ink hover:border-brand hover:text-brand"
+                  >
+                    Exact
+                  </button>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-ink-muted">Tendered</span>
+                  <span className="font-bold tabular-nums text-ink">€{tenderedAmount.toFixed(2)}</span>
+                </div>
+                <NumericKeypad value={tendered} onChange={setTendered} maxLength={8} />
+                <div
+                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm font-bold ${
+                    changeDue >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
+                  }`}
+                >
+                  <span>{changeDue >= 0 ? 'Change due' : 'Still owed'}</span>
+                  <span className="tabular-nums">€{Math.abs(changeDue).toFixed(2)}</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {splitMode && (
           <div className="mt-4 flex flex-col gap-3">
             <div className="flex gap-1 rounded-lg bg-surface-sunken p-1 text-xs font-medium">
-              {(['amount', 'percentage', 'item'] as const).map((mode) => (
+              {(['amount', 'seat', 'percentage', 'item'] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
-                  disabled={submitting || (mode === 'item' && lines.length === 0)}
+                  disabled={
+                    submitting ||
+                    (mode === 'item' && lines.length === 0) ||
+                    (mode === 'seat' && !seatSplitPossible)
+                  }
                   onClick={() => setSplitBy(mode)}
                   className={`flex-1 rounded-md py-1.5 capitalize transition-colors disabled:opacity-40 ${
                     splitBy === mode ? 'bg-surface text-brand shadow-sm' : 'text-ink-muted'
                   }`}
+                  title={mode === 'seat' && !seatSplitPossible ? 'Assign items to seats in the order sidebar first' : undefined}
                 >
-                  {mode === 'item' ? 'By item' : mode}
+                  {mode === 'item' ? 'By item' : mode === 'amount' ? 'Equally' : mode}
                 </button>
               ))}
             </div>
 
+            {splitBy !== 'seat' && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-ink-muted">Split into</span>
               <input
@@ -218,6 +320,7 @@ export function PaymentModal({
               />
               <span className="text-ink-muted">ways</span>
             </div>
+            )}
 
             {splitBy === 'amount' && (
               <>
@@ -295,6 +398,26 @@ export function PaymentModal({
                   {percentValid ? 'Percentages add up to 100%.' : `Percentages sum to ${percentSum}% (need 100%).`}
                 </p>
               </>
+            )}
+
+            {splitBy === 'seat' && (
+              <div className="flex max-h-56 flex-col gap-2 overflow-y-auto">
+                {seatGroups.map(({ seat, amount }) => (
+                  <div key={seat} className="flex items-center gap-2 text-sm">
+                    <span className="w-16 flex-shrink-0 text-xs text-ink-muted">{seat === 0 ? 'Shared' : `Seat ${seat}`}</span>
+                    <span className="flex-1 text-right font-semibold tabular-nums text-ink">€{amount.toFixed(2)}</span>
+                    <select
+                      value={seatMethods[seat] ?? 'card'}
+                      disabled={submitting}
+                      onChange={(e) => setSeatMethods((prev) => ({ ...prev, [seat]: e.target.value as 'cash' | 'card' }))}
+                      className="rounded-lg border border-border px-2 py-1.5 text-sm"
+                    >
+                      <option value="card">Card</option>
+                      <option value="cash">Cash</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
             )}
 
             {splitBy === 'item' && (

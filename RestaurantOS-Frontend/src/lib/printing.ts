@@ -49,6 +49,30 @@ export async function setConfiguredPrinter(role: PrinterRole, printer: Configure
   await bridge.setConfig(CONFIG_KEY[role], printer);
 }
 
+export type CashDrawerResult = 'kicked' | 'no-printer-configured' | 'no-bridge';
+
+/**
+ * Real cash-drawer kick (SaaS design pass, 2026-09-25 -- PosHeader's "Drawer Kick" quick
+ * action). Most restaurant cash drawers aren't network devices at all -- they're wired
+ * through the receipt printer's kick-out port, and ESC/POS already has a standard "pulse the
+ * drawer pin" command for exactly this. That command has existed in this codebase's ticket
+ * vocabulary since printing.ts was first built (see `PrintInstruction`'s `{ op: 'cashdraw' }`
+ * variant and hardware.js's ESC/POS bridge) but nothing ever actually sent one -- every
+ * checkout flow only ever printed a receipt, never kicked the drawer on its own. This reuses
+ * the SAME bridge.openCashDrawer(printerId) the preload.js/hardware.js pair already expose,
+ * targeting whichever printer is configured for receipts (the drawer is normally daisy-chained
+ * off that one). Same honesty caveat as the rest of this file: protocol-correct, unverified
+ * against physical hardware in this dev environment.
+ */
+export async function openCashDrawer(): Promise<CashDrawerResult> {
+  const bridge = getDesktopBridge();
+  if (!bridge) return 'no-bridge';
+  const printer = await getConfiguredPrinter('receipt');
+  if (!printer) return 'no-printer-configured';
+  await bridge.openCashDrawer(printer.id);
+  return 'kicked';
+}
+
 export interface TicketLine {
   name: string;
   qty: number;
@@ -61,6 +85,10 @@ export interface TicketLine {
   // certifiably accurate end-to-end, since it reads straight from the client-side cart lines
   // that were actually charged, with no lossy flat-map round trip in between.
   modifiers?: string[];
+  // Per-line note ("no onions", "extra crispy") -- OrderSidebar's note drawer (SaaS design
+  // pass, 2026-09-25). Only meaningful for kitchen tickets (a customer receipt doesn't need
+  // a prep instruction repeated on it), so only buildKitchenTicket/kitchenTicketHtml read it.
+  note?: string;
 }
 
 export interface ReceiptData {
@@ -93,6 +121,7 @@ export function cartLinesToTicketLines(lines: CartLine[]): TicketLine[] {
       modifiers: (l.modifiers ?? []).map((m) =>
         m.price_delta ? `${m.name} (+€${m.price_delta.toFixed(2)})` : m.name
       ),
+      note: l.note,
     };
   });
 }
@@ -155,6 +184,9 @@ function buildKitchenTicket(data: KitchenTicketData): PrintInstruction[] {
     if (line.modifiers && line.modifiers.length > 0) {
       ticket.push({ op: 'style', size: [1, 1] }, { op: 'text', value: `   ${line.modifiers.join(', ')}` }, { op: 'style', size: [2, 2] }, { op: 'feed', lines: 1 });
     }
+    if (line.note) {
+      ticket.push({ op: 'style', size: [1, 1] }, { op: 'text', value: `   * ${line.note}` }, { op: 'style', size: [2, 2] }, { op: 'feed', lines: 1 });
+    }
   }
   ticket.push({ op: 'style', size: [1, 1] });
   if (data.note) ticket.push({ op: 'rule' }, { op: 'text', value: `Note: ${data.note}` });
@@ -203,7 +235,10 @@ function kitchenTicketHtml(data: KitchenTicketData): string {
         l.modifiers && l.modifiers.length > 0
           ? `<div class="line" style="font-size:12px;font-weight:normal;padding-left:14px">${escapeHtml(l.modifiers.join(', '))}</div>`
           : '';
-      return `<div class="line">${lineQtyLabel(l)} ${escapeHtml(l.name)}</div>${modLine}`;
+      const noteLine = l.note
+        ? `<div class="line" style="font-size:12px;font-weight:normal;font-style:italic;padding-left:14px">* ${escapeHtml(l.note)}</div>`
+        : '';
+      return `<div class="line">${lineQtyLabel(l)} ${escapeHtml(l.name)}</div>${modLine}${noteLine}`;
     })
     .join('');
   return `<!doctype html><html><head><title>Kitchen ticket</title><style>

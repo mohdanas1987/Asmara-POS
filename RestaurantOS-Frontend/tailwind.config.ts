@@ -35,6 +35,11 @@ const config: Config = {
           DEFAULT: 'rgb(var(--surface) / <alpha-value>)',
           raised: 'rgb(var(--surface-raised) / <alpha-value>)',
           sunken: 'rgb(var(--surface-sunken) / <alpha-value>)',
+          // Level 3 (SaaS design pass, 2026-09-25): active/selected surface -- a product
+          // card being configured, a selected floor table, an active payer tab. One notch
+          // brighter than `surface.raised` so a 3-level elevation system (canvas -> surface
+          // -> raised -> active) is visually distinguishable at a glance, not just by border.
+          active: 'rgb(var(--surface-active) / <alpha-value>)',
         },
         border: {
           DEFAULT: 'rgb(var(--border) / <alpha-value>)',
@@ -45,10 +50,15 @@ const config: Config = {
         },
       },
       minHeight: {
-        touch: '44px', // Apple/Google's minimum recommended touch target
+        // SaaS design pass (2026-09-25): raised from 44px to 48px -- the spec this app now
+        // follows for a high-throughput touch POS (Toast/Square/Lightspeed-class) sets 48px
+        // as the floor, not 44px (Apple/Google's general mobile-app minimum). Every existing
+        // .touch-target / Button usage picks this up automatically since nothing hardcodes
+        // the old value elsewhere.
+        touch: '48px',
       },
       minWidth: {
-        touch: '44px',
+        touch: '48px',
       },
       // Beautification pass (2026-09-22): a small, reusable animation vocabulary so screens
       // don't each invent their own transition timing/easing. Used by the sidebar's group

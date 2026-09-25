@@ -6,11 +6,37 @@
  * seated time -- the old app's actual floor-plan richness the audit found this screen was
  * missing entirely. Uses design-system tokens (surface/border/ink) instead of hardcoded
  * neutral-* classes so it looks right in dark mode too.
+ *
+ * SaaS design pass (2026-09-25, "FloorPlanCanvas" spec) -- state badges now key off the
+ * REAL backend fields, not just the generic success/primary/warning/danger `className`
+ * color category (see routes/tables.js: className is derived from `status` for display, but
+ * `status` itself -- 'free' / 'occupied' / 'order ongoing' / 'reserved' -- is the actual
+ * semantic state):
+ *   - Available: status === 'free' -- unchanged green ("success") gradient, guest-count badge.
+ *   - Occupied: 'occupied' or 'order ongoing' -- amber glow, elapsed-time + running-subtotal
+ *     badge (both already existed; now explicitly the "occupied" visual regardless of which
+ *     of the two real occupied-ish statuses the backend used).
+ *   - "Ready to pay": order.payment === 'partial' -- the one REAL signal this data model has
+ *     for "this table is mid-checkout" (a split/partial payment has already been recorded
+ *     against it, see services/reports/salesReport.js's payment_status values). There is no
+ *     backend concept of a waiter-pressed "bill requested" flag yet (CartBillDialog's
+ *     print-preview is fire-and-forget, nothing persists it) -- rather than fake that state,
+ *     this reuses the one real "getting close to done" signal that already exists, pulsing
+ *     emerald so it's unmistakable from across the floor.
  */
 import { useRef } from 'react';
 import clsx from 'clsx';
 import { TableRow, TableOrderInfo } from '@/lib/types';
 import { useElapsedMinutes } from '@/lib/hooks/useElapsedMinutes';
+
+type FloorState = 'available' | 'occupied' | 'ready-to-pay' | 'other';
+
+function floorStateFor(table: TableRow, order?: TableOrderInfo): FloorState {
+  if (order?.payment === 'partial') return 'ready-to-pay';
+  if (table.status === 'free') return 'available';
+  if (table.status === 'occupied' || table.status === 'order ongoing') return 'occupied';
+  return 'other';
+}
 
 // Glossy, saturated gradient fills per status (not flat pastel) so the floor reads as
 // colorful/attractive at a glance from across the room, plus a matching glow shadow for a
@@ -63,6 +89,7 @@ export function TableBox({
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const moved = useRef(false);
   const elapsedMinutes = useElapsedMinutes(order?.created_at);
+  const floorState = floorStateFor(table, order);
 
   function handlePointerDown(e: React.PointerEvent) {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -103,6 +130,9 @@ export function TableBox({
         'touch-target relative flex select-none flex-col items-center justify-center gap-0.5 rounded-xl border-2 p-1 text-sm font-semibold transition-transform hover:-translate-y-0.5 hover:scale-[1.02]',
         selectionMode ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
         STATUS_STYLES[table.className] ?? STATUS_STYLES.danger,
+        // "Ready to pay" (real partial-payment signal) always wins visually over the plain
+        // occupied glow -- it's the more actionable state for staff scanning the floor.
+        floorState === 'ready-to-pay' && 'animate-pulse ring-4 ring-emerald-400/80 ring-offset-2 ring-offset-transparent',
         selected && 'ring-2 ring-white ring-offset-2 ring-offset-transparent',
         busy && 'opacity-60'
       )}
@@ -132,6 +162,12 @@ export function TableBox({
         <span className="text-[10px] font-normal opacity-80">
           {order.total != null && `€${Number(order.total).toFixed(2)}`}
           {elapsedMinutes != null && ` · ${elapsedMinutes}m`}
+        </span>
+      )}
+
+      {floorState === 'ready-to-pay' && (
+        <span className="rounded-full bg-emerald-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow-sm">
+          Ready to pay
         </span>
       )}
 
