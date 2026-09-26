@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushOutbox, getQueuedActions, QueuedAction } from '@/lib/offline/outbox';
-import { sendTableOrderToKitchen, chargeOrder, finishOrder, initTableOrder } from '@/lib/api';
+import { sendTableOrderToKitchen, chargeOrder, finishOrder, initTableOrder, openRegister, transferTable } from '@/lib/api';
 import { markOfflineOrderResolved, markOfflineOrderConflict, resolveOrderIdForReplay } from '@/lib/offline/offlineOrders';
+import {
+  markLocalRegisterSessionSyncing,
+  markLocalRegisterSessionSynced,
+  markLocalRegisterSessionOffline,
+} from '@/lib/offline/registerSession';
 import { isNetworkError } from '@/lib/offline/network';
 
 /**
@@ -39,6 +44,17 @@ interface ToKitchenBody {
 interface InitOfflineBody {
   tableNumber: string;
   clientOrderId: string;
+}
+
+interface RegisterOpenOfflineBody {
+  openingCash: number;
+  localSessionId: string;
+}
+
+interface TableTransferBody {
+  fromTable: string;
+  toTable: string;
+  terminalId?: string;
 }
 
 /**
@@ -109,6 +125,47 @@ async function replay(action: QueuedAction): Promise<unknown> {
       // let another terminal seat a new party at a table whose bill hasn't really been paid
       // yet, from the server's point of view, until this flush succeeds.
       return finishOrder(String(realOrderId), b.tableNumber);
+    }
+    case 'register.open-offline': {
+      // Offline-first register-session requirement (item 8, "reconnection must be
+      // automatic"): this is the queued action useRegisterSession.ts's open() enqueues when
+      // it opens a register locally while offline. Reuses the SAME idempotency key on every
+      // retry (action.idempotencyKey === the local record's idempotencyKey) so the backend's
+      // idempotent() middleware can never double-create the register row, even if this
+      // replay itself fires more than once (flushOutbox's own dedupe aside).
+      const b = action.body as unknown as RegisterOpenOfflineBody;
+      await markLocalRegisterSessionSyncing(b.localSessionId);
+      try {
+        const res = await openRegister(b.openingCash, action.idempotencyKey);
+        if (!res.status || !res.created) {
+          // A real rejection, not a network failure -- the local session stays open and
+          // usable (never silently closed just because the sync attempt failed); it's left
+          // marked as still offline/unsynced so a future manual retry or support action can
+          // resolve it, without ever showing the "Open Session" screen over an active shift.
+          await markLocalRegisterSessionOffline(b.localSessionId);
+          throw new Error(res.message || 'Failed to sync the offline-opened register.');
+        }
+        await markLocalRegisterSessionSynced(b.localSessionId, res.created.id);
+        return res;
+      } catch (err) {
+        if (isNetworkError(err)) {
+          // Still genuinely offline -- keep queued, retry later, but don't leave the local
+          // session stuck showing "SYNCING" in the meantime.
+          await markLocalRegisterSessionOffline(b.localSessionId);
+        }
+        throw err;
+      }
+    }
+    case 'tables.transfer': {
+      // Offline-first requirement (item 6, "table transfers must survive network loss"):
+      // useTables.ts's transfer() queues this exact shape on a network failure. Retried with
+      // the SAME idempotency key; the backend has no dedicated idempotency guard on
+      // /tables/transfer, but its own precondition checks (destination must be free, source
+      // must have an active order) make a blind retry after an already-succeeded transfer
+      // fail closed rather than double-apply -- see useTables.ts's comment for the full
+      // reasoning on why that's an acceptable, documented limitation rather than a silent gap.
+      const b = action.body as unknown as TableTransferBody;
+      return transferTable(b.fromTable, b.toTable, b.terminalId);
     }
     default:
       throw new Error(`Unknown queued action type: ${action.type}`);

@@ -28,7 +28,11 @@ const DB_NAME = 'asmara-pos-offline';
 // Bumped to 3 (CTO remediation doc, Section 5: "offline restart recovery" -- add 5 items,
 // restart, reopen, items must still exist) for the new CART_DRAFTS_STORE below. Each bump
 // only ADDS a store in onupgradeneeded; existing stores and their data are untouched.
-const DB_VERSION = 3;
+const DB_VERSION = 4;
+// Bumped to 4 (offline-first register-session durability, 2026-09-26 production-critical
+// requirement) for REGISTER_SESSION_STORE below -- see registerSession.ts for why this needs
+// its own store rather than reusing CACHE_STORE (a locally-authored, never-evicted record,
+// not a read-through cache of server data).
 export const CACHE_STORE = 'cache';
 export const OUTBOX_STORE = 'outbox';
 // Local record of a table/order opened while offline, before the server has ever heard of it
@@ -45,6 +49,11 @@ export const OFFLINE_ORDERS_STORE = 'offlineOrders';
 // concrete requirement for offline orders; fixing it for online orders too is the same one
 // change, since the loss was never actually offline-specific.
 export const CART_DRAFTS_STORE = 'cartDrafts';
+// The durable local RegisterSession record (offline-first session requirement, item 2) --
+// a SINGLETON per terminal, keyed by a fixed string (see registerSession.ts's STORE_KEY).
+// This is the source of truth for "is the register open", independent of whether the
+// backend is reachable -- never a cache of a server response.
+export const REGISTER_SESSION_STORE = 'registerSession';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -73,6 +82,9 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains(CART_DRAFTS_STORE)) {
           db.createObjectStore(CART_DRAFTS_STORE, { keyPath: 'orderId' });
+        }
+        if (!db.objectStoreNames.contains(REGISTER_SESSION_STORE)) {
+          db.createObjectStore(REGISTER_SESSION_STORE, { keyPath: 'storeKey' });
         }
       };
       req.onsuccess = () => resolve(req.result);

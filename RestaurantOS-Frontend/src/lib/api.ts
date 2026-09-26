@@ -104,10 +104,19 @@ export async function getLastActiveSession() {
   );
 }
 
-export async function openRegister(openingCash: number) {
+export async function openRegister(openingCash: number, idempotencyKey?: string) {
   return apiFetch<{ status: boolean; created: import('./types').CashRegisterSession; message: string }>(
     '/pos/opening-day-cash-amount',
-    { method: 'POST', body: JSON.stringify({ cash: openingCash }) }
+    {
+      method: 'POST',
+      // Offline-first register-session requirement (2026-09-26): an optional idempotency
+      // key so a queued offline-open replay (see useOnlineStatus.ts's replay(),
+      // 'register.open-offline') can retry safely -- the backend's idempotent() middleware
+      // (routes/pos.js) replays the original response instead of opening a second register
+      // if this exact key was already used. Omitted entirely for the normal online-open
+      // path, which behaves exactly as before.
+      body: JSON.stringify(idempotencyKey ? { cash: openingCash, idempotency_key: idempotencyKey } : { cash: openingCash }),
+    }
   );
 }
 

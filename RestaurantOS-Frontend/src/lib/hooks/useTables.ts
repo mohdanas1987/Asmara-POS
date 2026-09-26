@@ -7,6 +7,7 @@ import { TableRow, TableOrderInfo } from '@/lib/types';
 import { loadWithCache } from '@/lib/offline/cache';
 import { isNetworkError } from '@/lib/offline/network';
 import { createOfflineOrder } from '@/lib/offline/offlineOrders';
+import { enqueueAction } from '@/lib/offline/outbox';
 
 export function useTables() {
   const [tables, setTables] = useState<TableRow[]>([]);
@@ -60,8 +61,50 @@ export function useTables() {
     async (fromTable: string, toTable: string) => {
       // terminal_id (task #47): lets the backend's sync log attribute this change to a real
       // terminal instead of falling back to 'unknown-terminal'.
-      await transferTable(fromTable, toTable, getTerminalId());
-      await refresh();
+      const terminalId = getTerminalId();
+      // Optimistic update (offline-first requirement, item 6 -- "table transfers must
+      // survive network loss"): move the order between tables in local state immediately so
+      // the cashier isn't blocked staring at a spinner while genuinely offline, exactly the
+      // same UX moveTable()/assignServer() above already give every OTHER table mutation.
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.table_number === fromTable) return { ...t, status: 'free', className: 'success' };
+          if (t.table_number === toTable) return { ...t, status: 'occupied', className: 'danger' };
+          return t;
+        })
+      );
+      setTableOrders((prev) => {
+        const moving = prev[fromTable];
+        if (!moving) return prev;
+        const next = { ...prev };
+        delete next[fromTable];
+        next[toTable] = moving;
+        return next;
+      });
+      try {
+        await transferTable(fromTable, toTable, terminalId);
+        await refresh();
+      } catch (err) {
+        if (!isNetworkError(err)) {
+          refresh(); // a real server rejection -- roll back to server truth, don't keep a bad optimistic move
+          throw err;
+        }
+        // Genuinely offline: queue the real transfer for the moment connectivity returns.
+        // KNOWN LIMITATION (documented, not silently papered over): unlike orders.to-kitchen
+        // /orders.create, this route has no backend idempotency key -- a blind retry after a
+        // response was lost but the transfer actually succeeded is not automatically
+        // deduplicated. It is, however, safe by construction rather than silently
+        // duplicating anything: /tables/transfer's own precondition checks require the
+        // destination to be free and the source to have an active, non-completed order, so a
+        // retry of an already-succeeded transfer fails closed (a clear, visible sync error)
+        // instead of moving the order a second time or corrupting table state.
+        await enqueueAction({
+          type: 'tables.transfer',
+          path: '/tables/transfer',
+          body: { fromTable, toTable, terminalId },
+          label: `Transfer table ${fromTable} -> ${toTable}`,
+        });
+      }
     },
     [refresh]
   );

@@ -41,3 +41,29 @@ export function getCurrentRole(): string | null {
     return null;
   }
 }
+
+/**
+ * Offline-first register-session requirement (2026-09-26): the local RegisterSession record
+ * (lib/offline/registerSession.ts) needs the tenant/user/role it belongs to WITHOUT a network
+ * round-trip, since it must be creatable while fully offline. The JWT already carries all
+ * three (same payload getCurrentRole reads) -- decoded here the same way, never trusted as an
+ * auth boundary (unchanged from the caveat above), only as the local snapshot the durable
+ * session record is tenant/terminal/permission-bound to.
+ */
+export function getCurrentUser(): { userId: number | null; tenantId: number | null; role: string | null } {
+  const token = getToken();
+  if (!token) return { userId: null, tenantId: null, role: null };
+  try {
+    const [, payloadSegment] = token.split('.');
+    if (!payloadSegment) return { userId: null, tenantId: null, role: null };
+    const payload = JSON.parse(base64UrlDecode(payloadSegment)) as DecodedTokenPayload;
+    return {
+      userId: payload.user?.id ?? null,
+      tenantId: payload.user?.tenant_id ?? null,
+      role: payload.user?.role ?? null,
+    };
+  } catch {
+    return { userId: null, tenantId: null, role: null };
+  }
+}
+

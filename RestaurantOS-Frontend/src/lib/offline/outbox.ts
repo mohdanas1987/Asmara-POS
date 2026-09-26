@@ -12,7 +12,17 @@
  */
 import { OUTBOX_STORE, isSupported, requestToPromise, withStore } from './db';
 
-export type QueuedActionType = 'orders.to-kitchen' | 'orders.create' | 'orders.checkout-table' | 'orders.init-offline';
+export type QueuedActionType =
+  | 'orders.to-kitchen'
+  | 'orders.create'
+  | 'orders.checkout-table'
+  | 'orders.init-offline'
+  // Offline-first register-session requirement (2026-09-26): queues the real
+  // /pos/opening-day-cash-amount call for a register that was opened locally while
+  // offline -- see lib/offline/registerSession.ts and useRegisterSession.ts's open().
+  | 'register.open-offline'
+  // Offline-first table-transfer requirement: see useTables.ts's transfer().
+  | 'tables.transfer';
 
 export interface QueuedAction {
   id?: number;

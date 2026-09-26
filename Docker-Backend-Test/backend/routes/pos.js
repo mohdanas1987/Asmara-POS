@@ -10,6 +10,7 @@ const { getCurrentDate } = require("../utils");
 const { logger } = require('../utils/logger');
 const { calculateInclusiveTax } = require('../utils/tax');
 const auditLog = require('../services/auditLog');
+const idempotent = require('../middlewares/idempotent');
 let error = { status : false, message:'Something went wrong!' }
 
 
@@ -112,7 +113,7 @@ router.post('/session', fetchuser, async(req, res)=> {
     }
 });
 
-router.post('/opening-day-cash-amount', fetchuser, async(req, res) => {
+router.post('/opening-day-cash-amount', fetchuser, idempotent('pos.opening-day-cash-amount'), async(req, res) => {
     try {
         let created = await CashRegister.query().insert({
             opening_cash: req.body.cash,

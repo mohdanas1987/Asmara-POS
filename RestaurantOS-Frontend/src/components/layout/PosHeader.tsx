@@ -61,7 +61,7 @@ function useClock(intervalMs: number) {
 }
 
 export function PosHeader({ cashierName }: { cashierName?: string }) {
-  const { session } = useRegisterSession();
+  const { session, state: registerState } = useRegisterSession();
   const { queuedCount } = useOnlineStatus();
   const now = useClock(30_000);
   const [switchingUser, setSwitchingUser] = useState(false);
@@ -101,8 +101,27 @@ export function PosHeader({ cashierName }: { cashierName?: string }) {
         <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">
           <div className="flex flex-col leading-tight">
             <span className="text-[10px] font-medium uppercase tracking-wide text-ink-muted">Register</span>
-            <span className="font-semibold tabular-nums text-ink">
-              {session ? `#${session.id}` : '—'}
+            <span className="flex items-center gap-1.5 font-semibold tabular-nums text-ink">
+              {session ? `#${session.id || 'offline'}` : '—'}
+              {/* Offline-first register-session requirement (2026-09-26): visible, honest
+                  status when this session is running on local truth alone -- never hides
+                  that the backend is unreachable, but never blocks the cashier either. */}
+              {registerState === 'ACTIVE_OFFLINE' && (
+                <span
+                  className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold normal-case tabular-nums text-amber-500"
+                  title="Backend unreachable -- this register session keeps working locally and will sync automatically."
+                >
+                  OFFLINE
+                </span>
+              )}
+              {registerState === 'SYNCING' && (
+                <span
+                  className="rounded-full bg-brand/15 px-1.5 py-0.5 text-[10px] font-bold normal-case tabular-nums text-brand"
+                  title="Syncing this register session with the server."
+                >
+                  SYNCING
+                </span>
+              )}
             </span>
           </div>
           <div className="flex flex-col leading-tight">
